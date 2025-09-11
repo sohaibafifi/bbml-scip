@@ -1,16 +1,17 @@
-End-to-end examples for bb-ml
+##  End-to-end examples for bb-ml
 
 This folder shows minimal flows for MLP and GNN models.
 
-Prerequisites
+## Prerequisites
 - C++: CMake, a SCIP install (`SCIP_DIR`), optionally ONNX Runtime (`ONNXRUNTIME_DIR`)
 - Python: `pip install -e ./py pytest`
+- LP files (e.g., from MIPLIB or Netlib) in data/train and data/val
 
-Makefile knobs
+##  Makefile knobs
 - `MODEL` = `mlp` or `gnn` (default: `mlp`)
 - `GRAPH` = `1` to log graph snapshots and train a graph-input GNN
 
-Common steps
+##  Common steps
 1) Build the plugin
    - `make -C .. build` or from this folder: `make build`
    - Set `SCIP_DIR` to your SCIP install prefix.
@@ -28,7 +29,7 @@ Common steps
 4) Run SCIP with the exported model
    - `make scip-ml` (uses `examples/out/score_<MODEL>.onnx`)
 
-Notes
+##  Notes
 - The plugin library is built under `build/cpp/` as a module named `bbml_scip`.
 - The example runner (`bbml_run`) prints a machine-readable summary line (nodes, time, gap, etc.).
 - Runtime parameters (examples):
