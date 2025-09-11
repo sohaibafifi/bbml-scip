@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bbml"
+version = "0.0.1"
+dependencies = [
+  "torch>=2.2",
+  "torch_geometric>=2.5; platform_system!='Windows'",
+  "pandas>=2.1",
+  "pyarrow>=15",
+  "scikit-learn>=1.4",
+  "hydra-core>=1.3",
+  "onnx>=1.16",
+  "onnxruntime>=1.18",
+  "xgboost>=3.0.5"
+
+]
+optional-dependencies = { develop = ["pre-commit", "pytest"] }

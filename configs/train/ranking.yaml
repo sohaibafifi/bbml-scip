@@ -1,0 +1,6 @@
+data: data/logs/train.parquet
+val: data/logs/val.parquet
+batch_size: 8
+optimizer: adamw
+lr: 3e-4
+epochs: 20

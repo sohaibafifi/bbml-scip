@@ -1,0 +1,3 @@
+- node/*  → node_*
+- candidates[]/* → repeated columns with list encodings (Arrow)
+- targets/* → optional during inference

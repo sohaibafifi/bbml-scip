@@ -1,0 +1,7 @@
+encoder:
+  d_var: 32
+  d_con: 32
+  d_hidden: 64
+  layers: 3
+rank_head:
+  dim: 64

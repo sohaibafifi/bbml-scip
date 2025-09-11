@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "bbml-telemetry",
+  "type": "object",
+  "properties": {
+    "instance_id": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "node_id": {
+      "type": "string"
+    },
+    "parent_node_id": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "integer"
+        },
+        "open_nodes": {
+          "type": "integer"
+        },
+        "best_bound": {
+          "type": "number"
+        },
+        "incumbent": {
+          "type": "number"
+        },
+        "gap": {
+          "type": "number"
+        },
+        "lp_time": {
+          "type": "number"
+        },
+        "lp_iterations": {
+          "type": "integer"
+        },
+        "refactor_count": {
+          "type": "integer"
+        },
+        "cond_est": {
+          "type": "number"
+        },
+        "cut_rounds": {
+          "type": "integer"
+        },
+        "root_cut_rounds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "depth",
+        "open_nodes",
+        "best_bound",
+        "incumbent",
+        "gap"
+      ]
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "var_id": {
+            "type": "integer"
+          },
+          "obj": {
+            "type": "number"
+          },
+          "reduced_cost": {
+            "type": "number"
+          },
+          "fracval": {
+            "type": "number"
+          },
+          "domain_width": {
+            "type": "number"
+          },
+          "pseudocost_up": {
+            "type": "number"
+          },
+          "pseudocost_down": {
+            "type": "number"
+          },
+          "pc_obs_up": {
+            "type": "integer"
+          },
+          "pc_obs_down": {
+            "type": "integer"
+          },
+          "is_binary": {
+            "type": "integer"
+          },
+          "is_integer": {
+            "type": "integer"
+          },
+          "is_indicator": {
+            "type": "integer"
+          },
+          "is_sos": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "var_id",
+          "obj",
+          "reduced_cost",
+          "fracval"
+        ]
+      }
+    },
+    "targets": {
+      "type": "object",
+      "properties": {
+        "sb_score_up": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "sb_score_down": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "chosen_idx": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "required": [
+    "instance_id",
+    "node_id",
+    "node",
+    "candidates"
+  ]
+}

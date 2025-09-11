@@ -1,0 +1,8 @@
+alpha:
+  max: 0.8
+  min: 0.1
+  depth_penalty: 0.02
+confidence:
+  gate: 0.3
+numerics:
+  cond_threshold: 1e8
