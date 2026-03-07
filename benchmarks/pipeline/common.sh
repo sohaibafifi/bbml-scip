@@ -66,6 +66,45 @@ bbml_resolve_runner() {
   BBML_RUNNER_BIN=""
 }
 
+bbml_find_probe_instance() {
+  if [ -n "${BBML_PROBE_INSTANCE:-}" ] && [ -f "${BBML_PROBE_INSTANCE}" ]; then
+    printf '%s\n' "$BBML_PROBE_INSTANCE"
+    return
+  fi
+
+  local candidate
+  for candidate in \
+    "$BBML_ROOT/examples/data/branching.lp" \
+    "$BBML_ROOT/examples/data/toy.lp"
+  do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  candidate="$(
+    find "$BBML_ROOT/data/instances" "$BBML_ROOT/examples/data" -type f \
+      \( -name '*.lp' -o -name '*.mps' -o -name '*.mps.gz' \) 2>/dev/null \
+      | sort | sed -n '1p'
+  )"
+  if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+
+  local list_file inst
+  while IFS= read -r list_file; do
+    [ -z "$list_file" ] && continue
+    while IFS= read -r inst; do
+      if [ -n "$inst" ] && [ -f "$inst" ]; then
+        printf '%s\n' "$inst"
+        return
+      fi
+    done < "$list_file"
+  done < <(find "$BBML_ROOT/benchmarks/instances" -maxdepth 1 -name '*_*.txt' 2>/dev/null | sort)
+}
+
 bbml_verify_runner() {
   if [ -z "${BBML_RUNNER_BIN:-}" ]; then
     echo "ERROR: BBML_RUNNER_BIN is empty." >&2
@@ -74,14 +113,17 @@ bbml_verify_runner() {
   if [ "${BBML_RUNNER_CHECKED:-}" = "$BBML_RUNNER_BIN" ]; then
     return
   fi
-  if [ ! -f "$BBML_ROOT/examples/data/branching.lp" ]; then
-    echo "ERROR: probe instance missing: $BBML_ROOT/examples/data/branching.lp" >&2
+  local probe_instance
+  probe_instance="$(bbml_find_probe_instance)"
+  if [ -z "$probe_instance" ]; then
+    echo "ERROR: no probe instance found." >&2
+    echo "Set BBML_PROBE_INSTANCE to any .lp/.mps instance file, or generate instances first." >&2
     exit 1
   fi
 
   local probe_out probe_rc
   probe_out="$("$BBML_RUNNER_BIN" \
-    --problem "$BBML_ROOT/examples/data/branching.lp" \
+    --problem "$probe_instance" \
     --param 'bbml/enable=FALSE' \
     --param 'bbml/telemetry=FALSE' \
     --param 'limits/time=1' \

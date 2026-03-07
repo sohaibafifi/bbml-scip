@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BBML_ROOT="${BBML_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 . "$SCRIPT_DIR/common.sh"
-bbml_require_runner
+bbml_resolve_runner
 
 export BBML_ROOT
 export RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"

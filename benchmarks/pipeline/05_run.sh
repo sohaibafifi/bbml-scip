@@ -45,10 +45,16 @@ if [ ${#INSTANCE_SETS[@]} -eq 0 ]; then
 fi
 
 if [[ ",$METHODS," == *",strong-branch,"* ]]; then
-  probe_out="$("$BBML_RUNNER_BIN" --problem "$BBML_ROOT/examples/data/branching.lp" --param 'bbml/enable=FALSE' --param 'branching/fullstrong/priority=1000000' 2>&1 || true)"
-  if printf '%s' "$probe_out" | grep -Eq 'ERROR:|error:|wrong parameter type|unknown parameter'; then
-    echo "WARNING: branching/fullstrong/priority is unavailable in this SCIP build; dropping strong-branch."
+  probe_instance="$(bbml_find_probe_instance)"
+  if [ -z "$probe_instance" ]; then
+    echo "WARNING: no probe instance found; dropping strong-branch."
     METHODS="$(printf '%s' "$METHODS" | sed 's/,\?strong-branch,\?/,/g; s/^,//; s/,$//; s/,,*/,/g')"
+  else
+    probe_out="$("$BBML_RUNNER_BIN" --problem "$probe_instance" --param 'bbml/enable=FALSE' --param 'branching/fullstrong/priority=1000000' 2>&1 || true)"
+    if printf '%s' "$probe_out" | grep -Eq 'ERROR:|error:|wrong parameter type|unknown parameter'; then
+      echo "WARNING: branching/fullstrong/priority is unavailable in this SCIP build; dropping strong-branch."
+      METHODS="$(printf '%s' "$METHODS" | sed 's/,\?strong-branch,\?/,/g; s/^,//; s/,$//; s/,,*/,/g')"
+    fi
   fi
 fi
 
