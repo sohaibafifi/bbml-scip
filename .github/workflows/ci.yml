@@ -22,16 +22,11 @@ jobs:
           python -m pip install black
           black --check py
       - name: Run Python tests
-        run: pytest -q tests/py
+        run: make test-py
 
   cpp:
     runs-on: ubuntu-latest
-    if: env.SCIP_DIR != ''
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build -j 2
-
+      - name: Run C++ tests
+        run: make test-cpp

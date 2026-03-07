@@ -1,34 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ $# -lt 2 ]; then
-  echo "Usage: $0 <plugin_so> <instance.lp> [extra SCIP -c commands...]" >&2
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <instance.lp> [extra name=value params...]" >&2
   exit 1
 fi
 
-PLUGIN_SO="$1"; shift
 INSTANCE="$1"; shift
-
-# Resolve absolute paths
-if [ ! -f "$PLUGIN_SO" ]; then
-  echo "Plugin library not found: $PLUGIN_SO" >&2
-  exit 1
-fi
-PLUGIN_SO_ABS="$(cd "$(dirname "$PLUGIN_SO")" && pwd)/$(basename "$PLUGIN_SO")"
 INSTANCE_ABS="$(cd "$(dirname "$INSTANCE")" && pwd)/$(basename "$INSTANCE")"
 
-SCIP_BIN="${SCIP_BIN:-scip}"
-if ! command -v "$SCIP_BIN" >/dev/null 2>&1; then
-  echo "scip binary not found (set SCIP_BIN)." >&2
-  exit 1
-fi
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BBML_ROOT="$ROOT_DIR"
+. "$ROOT_DIR/benchmarks/pipeline/common.sh"
+bbml_require_runner
+RUNNER="$BBML_RUNNER_BIN"
 
 mkdir -p examples/out
-echo "Running SCIP with plugin $PLUGIN_SO_ABS on instance $INSTANCE_ABS"
-echo "Running SCIP with plugin $PLUGIN_SO_ABS on instance $INSTANCE_ABS"
-"$SCIP_BIN" \
-  -c "load plugins $PLUGIN_SO_ABS" \
-  -c "read $INSTANCE_ABS" \
-  "$@" \
-  -c "optimize" \
-  -c "quit"
+echo "Running bbml_run on instance $INSTANCE_ABS"
+CMD=("$RUNNER" --problem "$INSTANCE_ABS")
+for extra in "$@"; do
+  CMD+=(--param "$extra")
+done
+"${CMD[@]}"

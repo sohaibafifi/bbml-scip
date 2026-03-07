@@ -3,6 +3,7 @@ import os
 from typing import Optional, Tuple, Any, Dict
 
 import torch
+from torch.onnx import utils as onnx_utils
 from bbml.train.train_rank import ScoreMLP
 from bbml.models.graph_ranker import GraphRanker
 
@@ -74,7 +75,7 @@ def main():
         if args.fp16:
             model.half()
             dummy = dummy.half()
-        torch.onnx.export(
+        onnx_utils.export(
             model,
             dummy,
             args.out,
@@ -119,7 +120,7 @@ def main():
                 model.half()
                 var_feat = var_feat.half()
                 con_feat = con_feat.half()
-            torch.onnx.export(
+            onnx_utils.export(
                 model,
                 (var_feat, con_feat, edge_index),
                 args.out,
@@ -150,7 +151,7 @@ def main():
                     return self.base(var_feat, None, None)
 
             wrapper = VarOnlyWrapper(model)
-            torch.onnx.export(
+            onnx_utils.export(
                 wrapper,
                 var_feat,
                 args.out,

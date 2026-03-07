@@ -1,85 +1,44 @@
-# Baseline configurations for the BBML benchmark
-# Each entry defines solver settings passed to run_scip_with_ml.sh / evaluate_suite.sh
+# Supported benchmark methods for the runnable repository surface.
 
 defaults:
-  time_limit: 3600      # seconds
+  time_limit: 3600
   seeds: [0, 1, 2, 3, 4]
-  node_limit: -1        # -1 = unlimited
 
 baselines:
-
   scip-default:
-    description: "SCIP reliability branching (no ML)"
+    description: "SCIP branching without BBML scoring"
     ml: false
-    scip_settings:
-      branching/scorefunc: "s"      # reliability branching
-      branching/scorefac: 0.167
 
   strong-branch:
-    description: "Full strong branching (oracle)"
+    description: "SCIP full strong branching (only when available in the current SCIP build)"
     ml: false
-    scip_settings:
-      branching/fullstrong/priority: 1000000
-      branching/relpscost/priority: -1
 
-  gcnn-gasse19:
-    description: "Gasse et al. 2019 GCNN, alpha=1.0 (pure imitation)"
+  bbml-mlp:
+    description: "Tabular MLP ranker exported to ONNX"
     ml: true
-    model: results/models/gcnn_gasse19.onnx
-    alpha_max: 1.0
-    alpha_min: 1.0
-    depth_penalty: 0.0
-    confidence_gate: false
-    cond_threshold: -1   # disabled
+    model: results/models/bbml_mlp.onnx
+    temperature: results/models/bbml_mlp.temperature.txt
 
-  pure-imitation:
-    description: "BBML GNN with alpha=1.0 fixed"
+  bbml-gnn-varonly:
+    description: "Variable-only GNN ranker exported to ONNX"
     ml: true
-    model: results/models/bbml_gnn.onnx
-    alpha_max: 1.0
-    alpha_min: 1.0
-    depth_penalty: 0.0
-    confidence_gate: false
-    cond_threshold: -1
+    model: results/models/bbml_gnn_varonly.onnx
+    temperature: results/models/bbml_gnn_varonly.temperature.txt
 
-  alpha-fixed-0.5:
-    description: "BBML GNN with alpha=0.5 fixed"
+  bbml-gnn-graph:
+    description: "Graph-input GNN ranker exported to ONNX"
     ml: true
-    model: results/models/bbml_gnn.onnx
-    alpha_max: 0.5
-    alpha_min: 0.5
-    depth_penalty: 0.0
-    confidence_gate: false
-    cond_threshold: -1
+    model: results/models/bbml_gnn_graph.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt
 
-  tabular-xgb:
-    description: "XGBoost tabular ranker (no graph), ONNX"
+  bbml-gnn-graph-fp32:
+    description: "Graph-input GNN ranker exported as FP32 ONNX"
     ml: true
-    model: results/models/bbml_xgb.onnx
-    alpha_max: 0.8
-    alpha_min: 0.1
-    depth_penalty: 0.02
-    confidence_gate: true
-    cond_threshold: 1.0e8
+    model: results/models/bbml_gnn_graph_fp32.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt
 
-  bbml-nonode:
-    description: "BBML full branchrule, node selector disabled"
+  bbml-gnn-graph-fp16:
+    description: "Graph-input GNN ranker exported as FP16 ONNX"
     ml: true
-    model: results/models/bbml_gnn.onnx
-    alpha_max: 0.8
-    alpha_min: 0.1
-    depth_penalty: 0.02
-    confidence_gate: true
-    cond_threshold: 1.0e8
-    node_selector: false
-
-  bbml-full:
-    description: "BBML full system (branchrule + node selector)"
-    ml: true
-    model: results/models/bbml_gnn.onnx
-    alpha_max: 0.8
-    alpha_min: 0.1
-    depth_penalty: 0.02
-    confidence_gate: true
-    cond_threshold: 1.0e8
-    node_selector: true
+    model: results/models/bbml_gnn_graph_fp16.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt

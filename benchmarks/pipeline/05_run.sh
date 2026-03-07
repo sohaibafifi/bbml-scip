@@ -1,152 +1,188 @@
 #!/usr/bin/env bash
-# Step 05: Run all baselines and ablations on all test instance sets.
-# Appends one JSON line per run to $RESULTS_DIR/runs/{instance_id}.jsonl
-#
-# Usage:
-#   bash 05_run.sh [--baselines-only] [--ablations-only] [--set vrp|miplib_easy|...]
+# Step 05: Run supported baselines on test instances with one JSON artifact per run.
 set -euo pipefail
 
-BBML_ROOT="${BBML_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BBML_ROOT="${BBML_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+. "$SCRIPT_DIR/common.sh"
+bbml_resolve_python
+bbml_require_runner
+
 RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"
 MODEL_DIR="$RESULTS_DIR/models"
-SCIP_BIN="${SCIP_BIN:-scip}"
 TL="${BENCH_TL:-3600}"
 SEEDS="${BENCH_SEEDS:-0 1 2 3 4}"
+RUN_JOBS="${RUN_JOBS:-$(bbml_default_solver_jobs)}"
 
-RUN_BASELINES=true
-RUN_ABLATIONS=true
-INSTANCE_SETS=("sc_test" "ca_test" "cfl_test" "mis_test" "vrp_test")
+METHODS="${BENCH_METHODS:-scip-default,strong-branch,bbml-mlp,bbml-gnn-varonly,bbml-gnn-graph,bbml-gnn-graph-fp32,bbml-gnn-graph-fp16}"
+INSTANCE_SET_FILTER=""
 
 for arg in "$@"; do
   case $arg in
-    --baselines-only) RUN_ABLATIONS=false ;;
-    --ablations-only) RUN_BASELINES=false ;;
-    --set) shift; INSTANCE_SETS=("$1") ;;
+    --set=*) INSTANCE_SET_FILTER="${arg#*=}" ;;
+    --methods=*) METHODS="${arg#*=}" ;;
   esac
 done
 
 RUNS_DIR="$RESULTS_DIR/runs"
-ALPHA_DIR="$RESULTS_DIR/alpha_logs"
-mkdir -p "$RUNS_DIR" "$ALPHA_DIR"
+SCIP_LOG_DIR="$RESULTS_DIR/scip_logs"
+MANIFEST_DIR="${DATA_DIR:-$BBML_ROOT/data}/manifests"
+TASK_LOG_DIR="${DATA_DIR:-$BBML_ROOT/data}/pipeline_logs/run"
+mkdir -p "$RUNS_DIR" "$SCIP_LOG_DIR" "$MANIFEST_DIR" "$TASK_LOG_DIR"
 
-# ---- Helper: run one SCIP instance ----
-run_scip() {
-  local method="$1"
-  local inst="$2"
-  local seed="$3"
-  local ml_flag="$4"   # "true" or "false"
-  local model="$5"     # onnx path or ""
-  local extra_args="${6:-}"
+INSTANCE_SETS=()
+if [ -n "$INSTANCE_SET_FILTER" ]; then
+  INSTANCE_SETS+=("$INSTANCE_SET_FILTER")
+else
+  while IFS= read -r list_file; do
+    INSTANCE_SETS+=("$(basename "$list_file" .txt)")
+  done < <(find "$BBML_ROOT/benchmarks/instances" -maxdepth 1 -name '*_test.txt' | sort)
+fi
 
-  local id
-  id=$(basename "$inst" | sed 's/\.\(lp\|mps\|gz\)//g')
-  local out_jsonl="$RUNS_DIR/${id}.jsonl"
-  local alpha_log="$ALPHA_DIR/${id}_${method}_s${seed}.csv"
-  local scip_log="$RUNS_DIR/${id}_${method}_s${seed}.log"
+if [ ${#INSTANCE_SETS[@]} -eq 0 ]; then
+  echo "ERROR: no test instance lists found."
+  exit 1
+fi
 
-  # Skip if already done
-  if grep -q "\"solver\":\"$method\",\"seed\":$seed" "$out_jsonl" 2>/dev/null; then
-    return 0
+if [[ ",$METHODS," == *",strong-branch,"* ]]; then
+  probe_out="$("$BBML_RUNNER_BIN" --problem "$BBML_ROOT/examples/data/branching.lp" --param 'bbml/enable=FALSE' --param 'branching/fullstrong/priority=1000000' 2>&1 || true)"
+  if printf '%s' "$probe_out" | grep -Eq 'ERROR:|error:|wrong parameter type|unknown parameter'; then
+    echo "WARNING: branching/fullstrong/priority is unavailable in this SCIP build; dropping strong-branch."
+    METHODS="$(printf '%s' "$METHODS" | sed 's/,\?strong-branch,\?/,/g; s/^,//; s/,$//; s/,,*/,/g')"
   fi
+fi
 
-  local cmd_args=()
-  cmd_args+=(-c "set limits/time $TL")
-  cmd_args+=(-c "set randomization/randomseedshift $seed")
-  cmd_args+=(-c "set bbml/telemetry/alpha_logfile $alpha_log")
+PY_LAUNCH_JSON="$(bbml_python_json_array)"
+manifest="$MANIFEST_DIR/run_tasks.jsonl"
 
-  if [ "$ml_flag" = "true" ] && [ -n "$model" ]; then
-    cmd_args+=(-c "set bbml/branchrule/enabled TRUE")
-    cmd_args+=(-c "set bbml/branchrule/model $model")
-    [ -f "$MODEL_DIR/temperature.txt" ] && \
-      cmd_args+=(-c "set bbml/branchrule/temperature $(cat $MODEL_DIR/temperature.txt)")
-  fi
+echo "=== Benchmark run ==="
+echo "  Instance sets : ${INSTANCE_SETS[*]}"
+echo "  Methods       : $METHODS"
+echo "  Seeds         : $SEEDS"
+echo "  Time limit    : ${TL}s"
+echo "  Run jobs      : $RUN_JOBS"
+echo "  Runner        : $BBML_RUNNER_BIN"
+echo ""
 
-  # Append extra solver settings (from configs/baselines.yaml via caller)
-  [ -n "$extra_args" ] && cmd_args+=($extra_args)
+PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
+BBML_ROOT="$BBML_ROOT" \
+RESULTS_DIR="$RESULTS_DIR" \
+MODEL_DIR="$MODEL_DIR" \
+BBML_RUNNER="$BBML_RUNNER_BIN" \
+TIME_LIMIT="$TL" \
+SEEDS="$SEEDS" \
+METHODS="$METHODS" \
+INSTANCE_SETS="$(IFS=,; echo "${INSTANCE_SETS[*]}")" \
+SCRIPT="$SCRIPT_DIR/run_benchmark_task.py" \
+TASK_LOG_DIR="$TASK_LOG_DIR" \
+MANIFEST="$manifest" \
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
 
-  cmd_args+=(-c "read $inst")
-  cmd_args+=(-c "optimize")
-  cmd_args+=(-c "quit")
+def instance_id(path: Path) -> str:
+    name = path.name
+    if name.endswith(".mps.gz"):
+        return name[:-7]
+    for suffix in (".lp", ".mps", ".gz"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
 
-  local t0
-  t0=$(date +%s%N)
-  "$SCIP_BIN" "${cmd_args[@]}" > "$scip_log" 2>&1
-  local t1
-  t1=$(date +%s%N)
-  local elapsed
-  elapsed=$(echo "scale=3; ($t1 - $t0) / 1000000000" | bc)
+py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
+root = Path(os.environ["BBML_ROOT"])
+results_dir = Path(os.environ["RESULTS_DIR"])
+model_dir = Path(os.environ["MODEL_DIR"])
+runner_bin = os.environ["BBML_RUNNER"]
+time_limit = os.environ["TIME_LIMIT"]
+seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
+methods = [method for method in os.environ["METHODS"].split(",") if method]
+instance_sets = [name for name in os.environ["INSTANCE_SETS"].split(",") if name]
+script = os.environ["SCRIPT"]
+task_log_dir = Path(os.environ["TASK_LOG_DIR"])
+manifest = Path(os.environ["MANIFEST"])
 
-  # Parse SCIP log for KPIs
-  local status n_nodes time_solve first_inc root_time
-  status=$(grep -oP 'SCIP Status\s*:\s*\K\S+' "$scip_log" | head -1 || echo "unknown")
-  n_nodes=$(grep -oP 'nodes.*?:\s*\K[0-9]+' "$scip_log" | head -1 || echo "-1")
-  time_solve=$(grep -oP 'Solving Time.*?:\s*\K[0-9.]+' "$scip_log" | head -1 || echo "$elapsed")
-  first_inc=$(grep -oP 'First Solution.*?:\s*\K[0-9.]+' "$scip_log" | head -1 || echo "-1")
-  root_time=$(grep -oP 'Root Node.*?LP Time.*?:\s*\K[0-9.]+' "$scip_log" | head -1 || echo "-1")
-
-  # Append result
-  printf '{"instance_id":"%s","solver":"%s","seed":%s,"status":"%s","solve_time":%s,"n_nodes":%s,"time_to_first_inc":%s,"root_time":%s}\n' \
-    "$id" "$method" "$seed" "$status" "$time_solve" "$n_nodes" "$first_inc" "$root_time" \
-    >> "$out_jsonl"
+method_specs = {
+    "scip-default": {"disable_ml": True},
+    "strong-branch": {"disable_ml": True},
+    "bbml-mlp": {
+        "model": str(model_dir / "bbml_mlp.onnx"),
+        "temperature_file": str(model_dir / "bbml_mlp.temperature.txt"),
+    },
+    "bbml-gnn-varonly": {
+        "model": str(model_dir / "bbml_gnn_varonly.onnx"),
+        "temperature_file": str(model_dir / "bbml_gnn_varonly.temperature.txt"),
+    },
+    "bbml-gnn-graph": {
+        "model": str(model_dir / "bbml_gnn_graph.onnx"),
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+    },
+    "bbml-gnn-graph-fp32": {
+        "model": str(model_dir / "bbml_gnn_graph_fp32.onnx"),
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+    },
+    "bbml-gnn-graph-fp16": {
+        "model": str(model_dir / "bbml_gnn_graph_fp16.onnx"),
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+    },
 }
 
-# ---- Baselines ----
-if $RUN_BASELINES; then
-  echo "=== Running baselines ==="
-  METHODS=(
-    "scip-default:false:"
-    "strong-branch:false:-c 'set branching/fullstrong/priority 1000000'"
-    "pure-imitation:true:$MODEL_DIR/bbml_gnn.onnx"
-    "alpha-fixed-0.5:true:$MODEL_DIR/bbml_gnn.onnx"
-    "tabular-xgb:true:$MODEL_DIR/bbml_mlp.onnx"
-    "bbml-nonode:true:$MODEL_DIR/bbml_gnn.onnx"
-    "bbml-full:true:$MODEL_DIR/bbml_gnn.onnx"
-  )
+with manifest.open("w") as fh:
+    for instance_set in instance_sets:
+        list_file = root / "benchmarks" / "instances" / f"{instance_set}.txt"
+        if not list_file.exists():
+            continue
+        for line in list_file.read_text().splitlines():
+            inst = line.strip()
+            if not inst:
+                continue
+            iid = instance_id(Path(inst))
+            for method in methods:
+                spec = method_specs.get(method)
+                if spec is None:
+                    raise ValueError(f"Unsupported benchmark method: {method}")
+                for seed in seeds:
+                    result_out = results_dir / "runs" / method / f"{iid}_s{seed}.json"
+                    scip_log = results_dir / "scip_logs" / method / f"{iid}_s{seed}.log"
+                    cmd = py_launch + [
+                        script,
+                        "--runner-bin",
+                        runner_bin,
+                        "--instance",
+                        inst,
+                        "--solver",
+                        method,
+                        "--seed",
+                        seed,
+                        "--time-limit",
+                        time_limit,
+                        "--result-out",
+                        str(result_out),
+                        "--scip-log",
+                        str(scip_log),
+                    ]
+                    if spec.get("disable_ml"):
+                        cmd.append("--disable-ml")
+                    if spec.get("model"):
+                        cmd += ["--model", str(spec["model"])]
+                    if spec.get("temperature_file"):
+                        cmd += ["--temperature-file", str(spec["temperature_file"])]
+                    fh.write(
+                        json.dumps(
+                            {
+                                "name": f"run:{instance_set}:{method}:{iid}:s{seed}",
+                                "cmd": cmd,
+                                "cwd": os.getcwd(),
+                                "log_path": str(task_log_dir / f"{instance_set}_{method}_{iid}_s{seed}.log"),
+                                "skip": result_out.is_file() and result_out.stat().st_size > 0,
+                            }
+                        )
+                        + "\n"
+                    )
+PY
 
-  for inst_set in "${INSTANCE_SETS[@]}"; do
-    LIST="$BBML_ROOT/benchmarks/instances/${inst_set}.txt"
-    [ ! -f "$LIST" ] && echo "  WARNING: $LIST not found; skipping." && continue
-    echo "  Instance set: $inst_set"
-    instances=()
-    while IFS= read -r line; do instances+=("$line"); done < "$LIST"
-    for inst in "${instances[@]}"; do
-      [ -z "$inst" ] && continue
-      for method_str in "${METHODS[@]}"; do
-        IFS=':' read -r method ml_flag model <<< "$method_str"
-        for seed in $SEEDS; do
-          run_scip "$method" "$inst" "$seed" "$ml_flag" "$model" ""
-        done
-      done
-    done
-  done
-fi
-
-# ---- Ablations (VRP test only to save compute) ----
-if $RUN_ABLATIONS; then
-  echo "=== Running ablations ==="
-  # Run ablations on Set Covering (main Gasse benchmark) to save compute
-  ABL_LIST="$BBML_ROOT/benchmarks/instances/sc_test.txt"
-  [ ! -f "$ABL_LIST" ] && ABL_LIST="$BBML_ROOT/benchmarks/instances/vrp_test.txt"
-  [ ! -f "$ABL_LIST" ] && echo "WARNING: no ablation instance list found; skipping ablations." && exit 0
-
-  instances=()
-  while IFS= read -r line; do instances+=("$line"); done < "$ABL_LIST"
-  for inst in "${instances[@]}"; do
-    [ -z "$inst" ] && continue
-    # A2 ablations (blend weight)
-    for seed in $SEEDS; do
-      run_scip "a2_fixed_00" "$inst" "$seed" "false" "" ""
-      run_scip "a2_fixed_10" "$inst" "$seed" "true" "$MODEL_DIR/bbml_gnn.onnx" \
-        "-c 'set bbml/branchrule/alpha_max 1.0' -c 'set bbml/branchrule/alpha_min 1.0'"
-      run_scip "a2_adaptive" "$inst" "$seed" "true" "$MODEL_DIR/bbml_gnn.onnx" ""
-    done
-    # A5 ablations (FP16 vs FP32)
-    for seed in 0 1; do
-      run_scip "a5_fp32" "$inst" "$seed" "true" "$MODEL_DIR/bbml_gnn_fp32.onnx" ""
-      run_scip "a5_fp16" "$inst" "$seed" "true" "$MODEL_DIR/bbml_gnn_fp16.onnx" ""
-    done
-  done
-fi
+bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$RUN_JOBS"
 
 echo ""
-echo "=== Runs complete. Results in $RUNS_DIR ==="
+echo "Runs complete. Results in $RUNS_DIR"

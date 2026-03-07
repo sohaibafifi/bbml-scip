@@ -19,67 +19,44 @@ import pandas as pd
 SOLVER_ORDER = [
     "scip-default",
     "strong-branch",
-    "gcnn-gasse19",
-    "pure-imitation",
-    "alpha-fixed-0.5",
-    "tabular-xgb",
-    "bbml-nonode",
-    "bbml-full",
+    "bbml-mlp",
+    "bbml-gnn-varonly",
+    "bbml-gnn-graph",
+    "bbml-gnn-graph-fp32",
+    "bbml-gnn-graph-fp16",
 ]
 
 SOLVER_LABELS = {
     "scip-default": r"\texttt{scip-default}",
     "strong-branch": r"\texttt{strong-branch}",
-    "gcnn-gasse19": r"\texttt{gcnn-gasse19}~\citep{gasse2019exact}",
-    "pure-imitation": r"\texttt{pure-imitation} ($\alpha{=}1$)",
-    "alpha-fixed-0.5": r"\texttt{alpha-fixed} ($\alpha{=}0.5$)",
-    "tabular-xgb": r"\texttt{tabular-xgb}",
-    "bbml-nonode": r"\texttt{bbml-nonode}",
-    "bbml-full": r"\textbf{\texttt{bbml-full}} (ours)",
+    "bbml-mlp": r"\texttt{bbml-mlp}",
+    "bbml-gnn-varonly": r"\texttt{bbml-gnn-varonly}",
+    "bbml-gnn-graph": r"\textbf{\texttt{bbml-gnn-graph}}",
+    "bbml-gnn-graph-fp32": r"\texttt{bbml-gnn-graph-fp32}",
+    "bbml-gnn-graph-fp16": r"\texttt{bbml-gnn-graph-fp16}",
 }
 
 ABLATION_ORDER = [
-    "a1_gnn_full",
-    "a1_gnn_varonly",
-    "a1_tabular_xgb",
-    "a2_adaptive",
-    "a2_fixed_05",
-    "a2_fixed_10",
-    "a2_fixed_00",
-    "a3_with_temp",
-    "a3_no_temp",
-    "a4_with_cond_gate",
-    "a4_no_cond_gate",
-    "a5_fp32",
-    "a5_fp16",
-    "a6_with_nodesel",
-    "a6_no_nodesel",
+    "bbml-mlp",
+    "bbml-gnn-varonly",
+    "bbml-gnn-graph",
+    "bbml-gnn-graph-fp32",
+    "bbml-gnn-graph-fp16",
 ]
 
 ABLATION_LABELS = {
-    "a1_gnn_full": r"\textbf{A1} Full bipartite GNN",
-    "a1_gnn_varonly": r"\textbf{A1} Var-only GNN (no constraints)",
-    "a1_tabular_xgb": r"\textbf{A1} Tabular XGBoost",
-    "a2_adaptive": r"\textbf{A2} Adaptive $\alpha$ (ours)",
-    "a2_fixed_05": r"\textbf{A2} Fixed $\alpha{=}0.5$",
-    "a2_fixed_10": r"\textbf{A2} Fixed $\alpha{=}1.0$ (pure ML)",
-    "a2_fixed_00": r"\textbf{A2} Fixed $\alpha{=}0$ (solver only)",
-    "a3_with_temp": r"\textbf{A3} With temperature calibration",
-    "a3_no_temp": r"\textbf{A3} Without temperature ($T{=}1$)",
-    "a4_with_cond_gate": r"\textbf{A4} With cond.-number gate",
-    "a4_no_cond_gate": r"\textbf{A4} Without cond.-number gate",
-    "a5_fp32": r"\textbf{A5} FP32 ONNX",
-    "a5_fp16": r"\textbf{A5} FP16 ONNX",
-    "a6_with_nodesel": r"\textbf{A6} With node selector",
-    "a6_no_nodesel": r"\textbf{A6} Without node selector",
+    "bbml-mlp": r"MLP ranker",
+    "bbml-gnn-varonly": r"Var-only GNN",
+    "bbml-gnn-graph": r"Graph GNN",
+    "bbml-gnn-graph-fp32": r"Graph GNN FP32",
+    "bbml-gnn-graph-fp16": r"Graph GNN FP16",
 }
 
 ISET_LABELS = {
-    "vrp_train": "VRP-S",
-    "vrp_test": "VRP-M/L",
-    "miplib_easy": "MIPLIB easy",
-    "miplib_medium": "MIPLIB medium",
-    "setcover": "Set-cover",
+    "sc_test": "Set Cover",
+    "ca_test": "Comb. Auction",
+    "cfl_test": "Facility Loc.",
+    "mis_test": "MIS",
     "all": "All",
 }
 
@@ -103,7 +80,10 @@ def format_cell(val: float, best: float, sig: str = "", bold_if_best: bool = Tru
 def build_main_table(df: pd.DataFrame) -> str:
     present_isets = set(df["instance_set"].to_numpy().tolist())
     present_solvers_main = set(df["solver"].to_numpy().tolist())
-    isets = [c for c in ["vrp_train", "vrp_test", "miplib_easy", "miplib_medium"] if c in present_isets]
+    preferred_isets = ["sc_test", "ca_test", "cfl_test", "mis_test"]
+    isets = [c for c in preferred_isets if c in present_isets]
+    if not isets:
+        isets = sorted(present_isets)
     solvers = [s for s in SOLVER_ORDER if s in present_solvers_main]
     n_isets = len(isets)
 
@@ -166,7 +146,7 @@ def build_main_table(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def build_ablation_table(df: pd.DataFrame, iset: str = "vrp_test") -> str:
+def build_ablation_table(df: pd.DataFrame, iset: str = "sc_test") -> str:
     sub: pd.DataFrame = df[df["instance_set"] == iset]  # type: ignore[assignment]
     present_solvers = set(sub["solver"].to_numpy().tolist())
     ablations = [a for a in ABLATION_ORDER if a in present_solvers]
@@ -179,7 +159,7 @@ def build_ablation_table(df: pd.DataFrame, iset: str = "vrp_test") -> str:
     lines = []
     lines.append(r"\begin{table}[t]")
     lines.append(r"\centering")
-    lines.append(r"\caption{Ablation results on VRP-MIP test instances. SGM(10). Lower is better.}")
+    lines.append(r"\caption{Model and precision comparisons on the selected benchmark split. SGM(10). Lower is better.}")
     lines.append(r"\label{tab:ablations}")
     lines.append(r"\begin{tabular}{lcc}")
     lines.append(r"\toprule")
@@ -188,7 +168,7 @@ def build_ablation_table(df: pd.DataFrame, iset: str = "vrp_test") -> str:
 
     current_group = None
     for abl in ablations:
-        group = abl.split("_")[0].upper()
+        group = abl.split("-")[0].upper()
         if group != current_group:
             if current_group is not None:
                 lines.append(r"\midrule")
@@ -214,7 +194,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--kpis", required=True, type=Path, help="KPI CSV from kpis.py")
     ap.add_argument("--out", required=True, type=Path, help="Output directory for .tex files")
-    ap.add_argument("--ablation-set", default="vrp_test", help="Instance set to use for ablation table")
+    ap.add_argument("--ablation-set", default="sc_test", help="Instance set to use for the secondary comparison table")
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)

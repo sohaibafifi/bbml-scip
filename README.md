@@ -7,11 +7,23 @@ A SCIP plugin and Python package for ML-assisted branch-and-bound.
 At every branching node in the B&B tree, instead of choosing which variable to branch on purely by heuristic, BBML:
 
 1. Extracts node and candidate features from SCIP's LP state.
-2. Queries a calibrated bipartite GNN (exported to ONNX) for a ranking score.
-3. Blends the ML score with SCIP's default pseudocost score using a per-node weight α(N) driven by MC-dropout uncertainty, tree depth, and a condition-number guard.
+2. Queries an exported ONNX model for a ranking score.
+3. Blends the ML score with a reduced-cost fallback using a depth-adjusted blend weight and a fixed confidence scalar.
 4. Returns the candidate with the highest blended score.
 
-The result is a branching rule that is faster than strong branching, more robust than pure ML imitation, and degrades gracefully to solver defaults on numerically ill-conditioned subproblems.
+The supported deployable model paths in this repository are:
+
+- graph GNN with `(var_feat, con_feat, edge_index)` ONNX inputs
+- var-only GNN with `(var_feat,)` ONNX inputs
+- tabular MLP with `(X,)` ONNX inputs
+
+`bbml/numerics/cond_threshold` is exposed in the runtime interface, but the current feature extractor does not populate a non-zero condition estimate, so that guard is effectively inactive today.
+
+Important runtime distinction:
+
+- C/C++ API and `.set` files use slash-separated parameter names such as `bbml/enable`
+- `bbml_run --param` also uses slash-separated `name=value` pairs such as `bbml/enable=TRUE`
+- a stock `scip` shell does not know the `bbml/*` namespace unless those plugins are compiled into that executable
 
 ## Repository layout
 
@@ -59,21 +71,32 @@ it is not a standalone CMake source directory.
 
 Makefile knobs: `MODEL=mlp|gnn`, `GRAPH=0|1`, `TIME=<seconds>`, `NODES=<max>`.
 
-## Paper benchmark pipeline
+## Benchmark pipeline
 
-Follows the **Gasse et al. 2019** evaluation protocol: four standard synthetic
-families (SC, CA, CFL, MIS) plus VRP-MIP as a real-world domain set.
-No ecole required — instances are generated with a self-contained NumPy/NetworkX script.
+The repository ships a runnable benchmark pipeline around the four synthetic
+families used in Gasse et al. 2019:
+
+- `sc` — Set Covering
+- `ca` — Combinatorial Auctions
+- `cfl` — Capacitated Facility Location
+- `mis` — Maximum Independent Set
+
+No ecole is required. Instance generation uses only NumPy and NetworkX.
 
 ### Prerequisites
 
 ```bash
-export SCIP_BIN=/path/to/scip    # SCIP binary with bbml plugin compiled
 export BBML_ROOT=$(pwd)
 export RESULTS_DIR=$BBML_ROOT/results
 export DATA_DIR=$BBML_ROOT/data
-uv pip install -e ./py           # installs numpy, networkx, torch, onnx, ...
+export BBML_RUNNER=$BBML_ROOT/build/bbml_run   # built from this repository
+uv pip install -e ./py
 ```
+
+The benchmark scripts use `bbml_run`, not a plain `scip` shell. A stock `scip`
+binary does not know the BBML parameter namespace unless the plugin is compiled
+into that executable. If you see `command <bbml> not available`, you are running
+the wrong binary.
 
 ### Step-by-step
 
@@ -81,9 +104,9 @@ uv pip install -e ./py           # installs numpy, networkx, torch, onnx, ...
 ```bash
 bash benchmarks/pipeline/00_generate.sh
 ```
-Generates 10 000 train / 2 000 val / 2 000 test LP files per family (SC, CA, CFL, MIS)
-using `benchmarks/pipeline/generate_instances.py` (numpy + networkx only).
-Writes `benchmarks/instances/{family}_{split}.txt` path lists.
+Generates 10 000 train / 2 000 val / 2 000 test LP files per family by default.
+The script chunks generation work and runs it in bounded parallelism.
+It writes `benchmarks/instances/{family}_{split}.txt` path lists.
 
 Quick smoke test: `N_TRAIN=200 N_VAL=50 N_TEST=50 bash benchmarks/pipeline/00_generate.sh`
 
@@ -94,50 +117,82 @@ Quick smoke test: `N_TRAIN=200 N_VAL=50 N_TEST=50 bash benchmarks/pipeline/00_ge
 | CFL | Capacitated Facility Location | ~200 | ~300 |
 | MIS | Maximum Independent Set (BA-500) | 500 | ~2 500 |
 
-**Step 1 — collect strong-branching telemetry**
+**Step 1 — collect telemetry**
 ```bash
 bash benchmarks/pipeline/01_collect.sh
 ```
-Auto-discovers all `*_train.txt` lists, runs SCIP with full strong branching (capped at
-5 000 nodes per instance, 3 seeds). Skips already-collected instances.
-Output: `$DATA_DIR/logs/{family}/{id}_s{seed}.ndjson`
+Auto-discovers `train` and `val` instance lists, runs the BBML branchrule with
+strong-branching labels enabled for telemetry, and writes candidate and graph
+NDJSON independently per `(family, split, instance, seed)`.
+
+Outputs:
+
+- candidate telemetry: `$DATA_DIR/logs/{family}/{split}/candidates/{id}_s{seed}.ndjson`
+- graph telemetry: `$DATA_DIR/logs/{family}/{split}/graph/{id}_s{seed}.ndjson`
 
 **Step 2 — convert NDJSON → Parquet**
 ```bash
 bash benchmarks/pipeline/02_convert.sh
 ```
-Merges logs per family/split and converts to columnar Parquet via streaming
-schema inference. Output: `$DATA_DIR/parquet/{family}/{train,val}.parquet`
+Builds family-level and aggregate manifests, then converts candidate telemetry to
+Parquet without creating a temporary merged NDJSON file.
+
+Outputs:
+
+- family parquet: `$DATA_DIR/parquet/{family}/{train,val}.parquet`
+- aggregate parquet: `$DATA_DIR/parquet/{train,val}.parquet`
+- graph manifests: `$DATA_DIR/manifests/graph/{family}_{split}.txt`, `$DATA_DIR/manifests/graph/{train,val}.txt`
 
 **Step 3 — train models**
 ```bash
 bash benchmarks/pipeline/03_train.sh
 ```
-Trains full bipartite GNN, var-only GNN, tabular MLP, and XGBoost.
-Output: `$RESULTS_DIR/models/`
+Trains the supported deployable model paths only:
+
+- graph GNN from aggregate graph manifests
+- var-only GNN from aggregate candidate parquet
+- tabular MLP from aggregate candidate parquet
 
 **Step 4 — calibrate & export ONNX**
 ```bash
 bash benchmarks/pipeline/04_calibrate_export.sh
 ```
-Fits temperature scalar T* on the validation set (L-BFGS), exports FP32 / FP16 /
-var-only ONNX models, runs inference latency benchmark.
-Output: `$RESULTS_DIR/models/*.onnx`, `$RESULTS_DIR/latency.json`
+Fits a temperature for each trained checkpoint on validation data, exports ONNX
+from checkpoint metadata, and runs latency smoke benchmarks.
 
-**Step 5 — run all solvers**
+**Step 5 — run supported solvers**
 ```bash
 bash benchmarks/pipeline/05_run.sh
 ```
-Runs 8 baselines + ablations on all test sets (5 seeds per instance).
-Output: `$RESULTS_DIR/runs/{instance_id}.jsonl`
+Runs the supported methods on test sets and writes one JSON result per run:
+
+- `scip-default`
+- `strong-branch` when the current SCIP build exposes `branching/fullstrong/priority`
+- `bbml-mlp`
+- `bbml-gnn-varonly`
+- `bbml-gnn-graph`
+- `bbml-gnn-graph-fp32`
+- `bbml-gnn-graph-fp16`
+
+Output layout:
+
+- results: `$RESULTS_DIR/runs/{solver}/{instance_id}_s{seed}.json`
+- SCIP logs: `$RESULTS_DIR/scip_logs/{solver}/{instance_id}_s{seed}.log`
 
 **Step 6 — tables and figures**
 ```bash
-cd benchmarks/eval
-uv run python kpis.py         --results $RESULTS_DIR/runs --out $RESULTS_DIR/kpis.csv
-uv run python summary_table.py --kpis   $RESULTS_DIR/kpis.csv --out paper/tables/
-uv run python perf_profile.py  --results $RESULTS_DIR/runs    --out paper/figures/
-uv run python plot_alpha.py    --logs    $RESULTS_DIR/alpha_logs --out paper/figures/
+python benchmarks/eval/kpis.py \
+  --results $RESULTS_DIR/runs \
+  --instance-sets benchmarks/instances \
+  --out $RESULTS_DIR/kpis.csv
+
+python benchmarks/eval/summary_table.py \
+  --kpis $RESULTS_DIR/kpis.csv \
+  --out $RESULTS_DIR/eval/tables
+
+python benchmarks/eval/perf_profile.py \
+  --results $RESULTS_DIR/runs \
+  --out $RESULTS_DIR/eval/figures
 ```
 
 **Step 7 — compile paper**
@@ -160,18 +215,41 @@ bash benchmarks/pipeline/run_all.sh --skip-generate --skip-collect --skip-train
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `bbml/enable` | true | Enable ML-assisted branching |
-| `bbml/telemetry` | true | Log branch decisions as NDJSON |
-| `bbml/telemetry/logfile` | "" | NDJSON output path |
+| `bbml/telemetry` | true | Enable candidate telemetry logging |
+| `bbml/telemetry/path` | "" | Candidate NDJSON output path |
 | `bbml/telemetry/strongbranch` | false | Also log SB scores (expensive) |
 | `bbml/telemetry/graph` | false | Log graph snapshots (var/con/edge) |
+| `bbml/telemetry/graph_path` | "" | Graph NDJSON output path |
+| `bbml/telemetry/append` | true | Append instead of truncating on first open |
 | `bbml/model_path` | "" | Path to ONNX model |
 | `bbml/reload` | 0 | Increment to hot-reload model at runtime |
 | `bbml/alpha/max` | 0.8 | Maximum ML blend weight |
 | `bbml/alpha/min` | 0.1 | Minimum ML blend weight |
 | `bbml/alpha/depth_penalty` | 0.02 | α decay per tree level |
-| `bbml/confidence` | 0.3 | Sigmoid gate threshold θ |
+| `bbml/confidence` | 0.5 | Fixed confidence scalar used in α blending |
 | `bbml/temperature` | 1.0 | Score scaling (1/T applied before blending) |
-| `bbml/numerics/cond_threshold` | 1e8 | LP condition number above which ML is disabled |
+| `bbml/numerics/cond_threshold` | 1e8 | Condition threshold for gating ML when `cond_est` is available |
+
+Use these parameters either in a `.set` file:
+
+```text
+bbml/enable = TRUE
+bbml/model_path = "/path/to/model.onnx"
+limits/time = 60
+```
+
+or on the `bbml_run` command line:
+
+```bash
+./build/bbml_run \
+  --problem examples/data/branching.lp \
+  --param bbml/enable=TRUE \
+  --param bbml/model_path=/path/to/model.onnx \
+  --param limits/time=60
+```
+
+If you are embedding BBML into your own custom SCIP executable with the plugin
+linked in, the interactive shell form uses spaces, for example `set bbml enable TRUE`.
 
 ## C++ API example
 
@@ -192,7 +270,10 @@ SCIPsetIntParam  (scip, "bbml/reload", 1);
  "pseudocost_up": 1.3, "pseudocost_down": 0.9,
  "sb_score_up": 4.2, "sb_score_down": 3.1}
 ```
-Convert to Parquet: `uv run python -m bbml.data.json_to_parquet --in data.ndjson --out data.parquet`
+Convert to Parquet:
+
+- single file: `python -m bbml.data.json_to_parquet --in data.ndjson --out data.parquet`
+- manifest: `python -m bbml.data.json_to_parquet --manifest train_logs.txt --out data.parquet`
 
 **Graph NDJSON** (when `bbml/telemetry/graph=TRUE`) — one object per node:
 ```json
@@ -212,6 +293,6 @@ make test-cpp      # C++ only (requires CMake + GTest)
 ## Notes
 
 - **No ecole required**: instance generation uses only numpy and networkx.
-- **ONNX fallback**: if the model path is empty or invalid, the plugin falls back silently to SCIP's default heuristic (ML contribution = 0).
+- **Reduced-cost fallback**: if the model path is empty or invalid, the branchrule still runs and falls back to the reduced-cost side of the blend.
 - **Hot reload**: increment `bbml/reload` to swap the ONNX model mid-solve without restarting SCIP.
 - **Graph vs var-only**: graph ONNX uses `(var_feat, con_feat, edge_index)` inputs; var-only uses `(var_feat,)` only. The exporter chooses automatically based on the checkpoint.

@@ -2,6 +2,7 @@ import argparse
 import math
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 import json
 
@@ -320,19 +321,18 @@ def train_epoch_gnn(
 
 
 class GraphJsonNodeDataset(Dataset):
-    def __init__(self, ndjson_path: str):
-        if not os.path.exists(ndjson_path):
-            raise FileNotFoundError(ndjson_path)
-        self.path = ndjson_path
+    def __init__(self, ndjson_path: Optional[str] = None, manifest_path: Optional[str] = None):
+        self.paths = self._resolve_paths(ndjson_path, manifest_path)
         # Build byte offsets for each line to support random access without loading all
-        self._offsets: List[int] = []
-        with open(self.path, "rb") as f:
-            off = 0
-            for line in f:
-                ln = len(line)
-                if ln > 1:
-                    self._offsets.append(off)
-                off += ln
+        self._offsets: List[tuple[str, int]] = []
+        for path in self.paths:
+            with open(path, "rb") as f:
+                off = 0
+                for line in f:
+                    ln = len(line)
+                    if ln > 1:
+                        self._offsets.append((path, off))
+                    off += ln
         # Peek first line to infer dims
         self.d_var = 0
         self.d_con = 0
@@ -341,12 +341,34 @@ class GraphJsonNodeDataset(Dataset):
             self.d_var = int(g0.var_feat.size(1))
             self.d_con = int(g0.con_feat.size(1)) if g0.con_feat is not None else 0
 
+    @staticmethod
+    def _resolve_paths(ndjson_path: Optional[str], manifest_path: Optional[str]) -> List[str]:
+        paths: List[str] = []
+        if ndjson_path:
+            if not os.path.exists(ndjson_path):
+                raise FileNotFoundError(ndjson_path)
+            paths.append(ndjson_path)
+        if manifest_path:
+            manifest = Path(manifest_path)
+            if not manifest.exists():
+                raise FileNotFoundError(manifest_path)
+            for line in manifest.read_text().splitlines():
+                path = line.strip()
+                if not path:
+                    continue
+                if not os.path.exists(path):
+                    raise FileNotFoundError(path)
+                paths.append(path)
+        if not paths:
+            raise ValueError("expected --graph_ndjson or --graph_manifest")
+        return paths
+
     def __len__(self) -> int:
         return len(self._offsets)
 
     def _read_item(self, idx: int) -> "GraphNodeGroup":
-        off = self._offsets[idx]
-        with open(self.path, "rb") as f:
+        path, off = self._offsets[idx]
+        with open(path, "rb") as f:
             f.seek(off)
             line = f.readline()
         obj = json.loads(line)
@@ -389,6 +411,7 @@ def main():
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--model", type=str, default="mlp", choices=["mlp", "gnn"])
     parser.add_argument("--graph_ndjson", type=str, default=None, help="Path to graph NDJSON logged by C++ (var_feat, con_feat, edge_index)")
+    parser.add_argument("--graph_manifest", type=str, default=None, help="Manifest of graph NDJSON files, one path per line")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--synthetic_nodes", type=int, default=512)
     parser.add_argument("--d", type=int, default=len(DEFAULT_FEATS))
@@ -437,9 +460,9 @@ def main():
             "dropout": args.dropout,
         }
     else:
-        if args.graph_ndjson is not None:
+        if args.graph_ndjson is not None or args.graph_manifest is not None:
             # Load graph snapshots from NDJSON (constraints ↔ candidate vars)
-            ds_g = GraphJsonNodeDataset(args.graph_ndjson)
+            ds_g = GraphJsonNodeDataset(args.graph_ndjson, args.graph_manifest)
             loader = DataLoader(
                 ds_g,
                 batch_size=args.batch_size,

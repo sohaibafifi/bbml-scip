@@ -17,7 +17,7 @@ This folder shows minimal flows for MLP and GNN models.
 - `GRAPH` = `1` to log graph snapshots and train a graph-input GNN
 
 ##  Common steps
-1) Build the plugin
+1) Build the runner
    - `make -C .. build` or from this folder: `make build`
    - Set `SCIP_DIR` to your SCIP install prefix.
    - Optional ONNX: set `ONNXRUNTIME_DIR` to your ORT install (with include/ and lib/).
@@ -35,12 +35,14 @@ This folder shows minimal flows for MLP and GNN models.
    - `make scip-ml` (uses `examples/out/score_<MODEL>.onnx`)
 
 ##  Notes
-- The plugin library is built under `build/cpp/` as a module named `bbml_scip`.
-- The example runner (`bbml_run`) prints a machine-readable summary line (nodes, time, gap, etc.).
-- Runtime parameters (examples):
-  - `set bbml/enable true`
-  - `set bbml/telemetry true`
-  - `set bbml/telemetry/graph true` and `set bbml/telemetry/graph_path "examples/out/train_graph.ndjson"` (for graph logging)
-  - `set bbml/model_path examples/out/score_<model>.onnx`
-  - `set bbml/confidence 0.6`
-  - `set bbml/reload 1`
+- The supported example entrypoint is `build/bbml_run`; it already includes the BBML plugins.
+- The example runner prints a machine-readable `BBML_SUMMARY` line (nodes, time, gap, etc.).
+- Configure runtime behavior through `.set` files or `--param name=value`, for example:
+  - `bbml/enable = TRUE`
+  - `bbml/telemetry = TRUE`
+  - `bbml/telemetry/graph = TRUE`
+  - `bbml/telemetry/graph_path = "examples/out/train_graph.ndjson"`
+  - `bbml/model_path = "examples/out/score_<model>.onnx"`
+  - `bbml/confidence = 0.6`
+  - `bbml/reload = 1`
+- A stock `scip` binary will reject `bbml/*` parameters unless you built those plugins into that exact executable.

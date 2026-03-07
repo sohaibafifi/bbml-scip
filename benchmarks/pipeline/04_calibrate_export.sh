@@ -1,100 +1,201 @@
 #!/usr/bin/env bash
-# Step 04: Temperature calibration + ONNX export.
-# Reads best GNN checkpoint, calibrates T*, exports FP32 and FP16 ONNX models.
+# Step 04: Calibrate supported checkpoints, export ONNX, and benchmark latency.
 set -euo pipefail
 
-BBML_ROOT="${BBML_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BBML_ROOT="${BBML_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+. "$SCRIPT_DIR/common.sh"
+bbml_resolve_python
+
 DATA_DIR="${DATA_DIR:-$BBML_ROOT/data}"
 RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"
 MODEL_DIR="$RESULTS_DIR/models"
-
-PY="uv run --project $BBML_ROOT/py python"
+EXPORT_JOBS="${EXPORT_JOBS:-2}"
 VAL_PARQUET="$DATA_DIR/parquet/val.parquet"
-GNN_CKPT="$MODEL_DIR/bbml_gnn_best.pt"
+GRAPH_VAL_MANIFEST="$DATA_DIR/manifests/graph/val.txt"
+
+GNN_GRAPH_CKPT="$MODEL_DIR/bbml_gnn_graph_best.pt"
+GNN_VARONLY_CKPT="$MODEL_DIR/bbml_gnn_varonly_best.pt"
 MLP_CKPT="$MODEL_DIR/bbml_mlp_best.pt"
 
-for f in "$VAL_PARQUET" "$GNN_CKPT"; do
-  [ ! -f "$f" ] && echo "ERROR: $f not found." && exit 1
+for path in "$VAL_PARQUET" "$GRAPH_VAL_MANIFEST" "$GNN_GRAPH_CKPT" "$GNN_VARONLY_CKPT" "$MLP_CKPT"; do
+  [ ! -f "$path" ] && echo "ERROR: missing required artifact: $path" && exit 1
 done
 
-# ---- Temperature calibration ----
-echo "[4.1] Fitting temperature scalar on validation set..."
-TEMP_OUT="$MODEL_DIR/temperature.txt"
-$PY -m bbml.train.calibrate \
+mkdir -p "$RESULTS_DIR" "$DATA_DIR/manifests" "$DATA_DIR/pipeline_logs/export"
+PY_LAUNCH_JSON="$(bbml_python_json_array)"
+
+echo "=== Calibration and export ==="
+echo "  Export jobs : $EXPORT_JOBS"
+echo ""
+
+echo "[1/3] Fitting checkpoint-aware temperatures..."
+bbml_python -m bbml.train.calibrate \
+  --ckpt "$GNN_GRAPH_CKPT" \
   --parquet "$VAL_PARQUET" \
-  --hidden 64 \
-  --dropout 0.1 \
+  --graph_manifest "$GRAPH_VAL_MANIFEST" \
   --device cpu \
-  2>&1 | tee /tmp/calibrate_out.txt
+  --out "$MODEL_DIR/bbml_gnn_graph.temperature.txt"
 
-T_STAR=$(grep -oP 'T=\K[0-9.]+' /tmp/calibrate_out.txt | tail -1)
-echo "$T_STAR" > "$TEMP_OUT"
-echo "  T* = $T_STAR -> $TEMP_OUT"
+bbml_python -m bbml.train.calibrate \
+  --ckpt "$GNN_VARONLY_CKPT" \
+  --parquet "$VAL_PARQUET" \
+  --device cpu \
+  --out "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"
 
-# ---- Export GNN FP32 (full graph signature) ----
-echo "[4.2] Exporting GNN FP32 ONNX (full graph)..."
-$PY -m bbml.export.export_onnx \
-  --model gnn \
-  --ckpt "$GNN_CKPT" \
-  --d_var 32 \
-  --d_con 32 \
-  --hidden 64 \
-  --layers 3 \
-  --graph_inputs \
-  --out "$MODEL_DIR/bbml_gnn_fp32.onnx"
-
-# ---- Export GNN FP16 ----
-echo "[4.3] Exporting GNN FP16 ONNX..."
-$PY -m bbml.export.export_onnx \
-  --model gnn \
-  --ckpt "$GNN_CKPT" \
-  --d_var 32 \
-  --d_con 32 \
-  --hidden 64 \
-  --layers 3 \
-  --graph_inputs \
-  --fp16 \
-  --out "$MODEL_DIR/bbml_gnn_fp16.onnx"
-
-# ---- Export GNN var-only FP32 (ablation A1) ----
-echo "[4.4] Exporting var-only GNN FP32..."
-$PY -m bbml.export.export_onnx \
-  --model gnn \
-  --ckpt "$MODEL_DIR/bbml_gnn_varonly_best.pt" \
-  --d_var 32 \
-  --d_con 32 \
-  --hidden 64 \
-  --layers 3 \
-  --out "$MODEL_DIR/bbml_gnn_varonly.onnx"
-
-# ---- Export MLP FP32 ----
-echo "[4.5] Exporting tabular MLP ONNX..."
-$PY -m bbml.export.export_onnx \
-  --model mlp \
+bbml_python -m bbml.train.calibrate \
   --ckpt "$MLP_CKPT" \
-  --d_in 6 \
-  --hidden 64 \
-  --out "$MODEL_DIR/bbml_mlp.onnx"
+  --parquet "$VAL_PARQUET" \
+  --device cpu \
+  --out "$MODEL_DIR/bbml_mlp.temperature.txt"
 
-# Create default symlink used by bbml-full
-ln -sf bbml_gnn_fp16.onnx "$MODEL_DIR/bbml_gnn.onnx"
+export_manifest="$DATA_DIR/manifests/export_tasks.jsonl"
+PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
+MODEL_DIR="$MODEL_DIR" \
+DATA_DIR="$DATA_DIR" \
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
 
-# ---- Latency benchmark ----
-echo "[4.6] Running ONNX latency benchmark..."
-$PY -m bbml.bench.latency \
-  --onnx "$MODEL_DIR/bbml_gnn_fp32.onnx" \
-  --d 32 \
-  --dims 100 250 500 1000 1500 2000 \
-  --runs 100 \
-  | tee "$RESULTS_DIR/latency_fp32.txt"
+py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
+model_dir = Path(os.environ["MODEL_DIR"])
+data_dir = Path(os.environ["DATA_DIR"])
+manifest = data_dir / "manifests" / "export_tasks.jsonl"
+log_dir = data_dir / "pipeline_logs" / "export"
+log_dir.mkdir(parents=True, exist_ok=True)
 
-$PY -m bbml.bench.latency \
-  --onnx "$MODEL_DIR/bbml_gnn_fp16.onnx" \
-  --d 32 \
-  --dims 100 250 500 1000 1500 2000 \
-  --runs 100 \
-  | tee "$RESULTS_DIR/latency_fp16.txt"
+tasks = [
+    ("bbml_gnn_graph_fp32", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_gnn_graph_best.pt"), "--out", str(model_dir / "bbml_gnn_graph_fp32.onnx")]),
+    ("bbml_gnn_graph_fp16", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_gnn_graph_best.pt"), "--fp16", "--out", str(model_dir / "bbml_gnn_graph_fp16.onnx")]),
+    ("bbml_gnn_varonly", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_gnn_varonly_best.pt"), "--out", str(model_dir / "bbml_gnn_varonly.onnx")]),
+    ("bbml_mlp", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_mlp_best.pt"), "--out", str(model_dir / "bbml_mlp.onnx")]),
+]
+
+with manifest.open("w") as fh:
+    for name, cmd in tasks:
+        out_path = Path(cmd[-1])
+        fh.write(
+            json.dumps(
+                {
+                    "name": f"export:{name}",
+                    "cmd": cmd,
+                    "cwd": os.getcwd(),
+                    "log_path": str(log_dir / f"{name}.log"),
+                    "skip": out_path.is_file() and out_path.stat().st_size > 0,
+                }
+            )
+            + "\n"
+        )
+PY
+
+echo "[2/3] Exporting ONNX models..."
+bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$export_manifest" --jobs "$EXPORT_JOBS"
+ln -sf bbml_gnn_graph_fp16.onnx "$MODEL_DIR/bbml_gnn_graph.onnx"
+
+latency_manifest="$DATA_DIR/manifests/latency_tasks.jsonl"
+PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
+MODEL_DIR="$MODEL_DIR" \
+RESULTS_DIR="$RESULTS_DIR" \
+DATA_DIR="$DATA_DIR" \
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
+model_dir = Path(os.environ["MODEL_DIR"])
+results_dir = Path(os.environ["RESULTS_DIR"])
+data_dir = Path(os.environ["DATA_DIR"])
+manifest = data_dir / "manifests" / "latency_tasks.jsonl"
+log_dir = data_dir / "pipeline_logs" / "export"
+log_dir.mkdir(parents=True, exist_ok=True)
+
+tasks = [
+    (
+        "latency_gnn_graph_fp32",
+        [
+            *py_launch,
+            "-m",
+            "bbml.bench.latency",
+            "--onnx",
+            str(model_dir / "bbml_gnn_graph_fp32.onnx"),
+            "--d_var",
+            "9",
+            "--d_con",
+            "4",
+            "--runs",
+            "100",
+        ],
+        results_dir / "latency_gnn_graph_fp32.txt",
+    ),
+    (
+        "latency_gnn_graph_fp16",
+        [
+            *py_launch,
+            "-m",
+            "bbml.bench.latency",
+            "--onnx",
+            str(model_dir / "bbml_gnn_graph_fp16.onnx"),
+            "--d_var",
+            "9",
+            "--d_con",
+            "4",
+            "--runs",
+            "100",
+        ],
+        results_dir / "latency_gnn_graph_fp16.txt",
+    ),
+    (
+        "latency_gnn_varonly",
+        [
+            *py_launch,
+            "-m",
+            "bbml.bench.latency",
+            "--onnx",
+            str(model_dir / "bbml_gnn_varonly.onnx"),
+            "--d",
+            "6",
+            "--runs",
+            "100",
+        ],
+        results_dir / "latency_gnn_varonly.txt",
+    ),
+    (
+        "latency_mlp",
+        [
+            *py_launch,
+            "-m",
+            "bbml.bench.latency",
+            "--onnx",
+            str(model_dir / "bbml_mlp.onnx"),
+            "--d",
+            "6",
+            "--runs",
+            "100",
+        ],
+        results_dir / "latency_mlp.txt",
+    ),
+]
+
+with manifest.open("w") as fh:
+    for name, cmd, out_path in tasks:
+        fh.write(
+            json.dumps(
+                {
+                    "name": name,
+                    "cmd": cmd,
+                    "cwd": os.getcwd(),
+                    "log_path": str(out_path),
+                    "skip": False,
+                }
+            )
+            + "\n"
+        )
+PY
+
+echo "[3/3] Benchmarking ONNX latency..."
+bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$latency_manifest" --jobs "$EXPORT_JOBS"
 
 echo ""
-echo "[4] Calibration + export complete."
-ls -lh "$MODEL_DIR"/*.onnx "$TEMP_OUT" 2>/dev/null
+echo "Calibration and export complete. Outputs in $MODEL_DIR and $RESULTS_DIR"

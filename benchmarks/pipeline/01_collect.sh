@@ -1,116 +1,144 @@
 #!/usr/bin/env bash
-# Step 01: Run SCIP with full strong branching on training instances to collect
-# telemetry (node features + SB scores) as NDJSON.
-#
-# Instance families (Gasse et al. 2019 protocol + VRP-MIP domain set):
-#   sc_train.txt   -- Set Covering
-#   ca_train.txt   -- Combinatorial Auctions
-#   cfl_train.txt  -- Capacitated Facility Location
-#   mis_train.txt  -- Maximum Independent Set
-#   vrp_train.txt  -- VRP-MIP (optional domain set)
-#
-# Each file should contain one .lp / .mps path per line.
-# Generate instances first: bash benchmarks/pipeline/00_generate.sh
-#
-# Output: $DATA_DIR/logs/{family}/{instance_id}_s{seed}.ndjson
-#
-# Requires:
-#   $SCIP_BIN      - SCIP binary with BBML plugin compiled in
-#   $BBML_ROOT     - project root
-#   $DATA_DIR      - output data directory (default: $BBML_ROOT/data)
+# Step 01: Collect candidate and graph telemetry for train/val splits.
 set -euo pipefail
 
-BBML_ROOT="${BBML_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BBML_ROOT="${BBML_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+. "$SCRIPT_DIR/common.sh"
+bbml_resolve_python
+bbml_require_runner
+
 DATA_DIR="${DATA_DIR:-$BBML_ROOT/data}"
-SCIP_BIN="${SCIP_BIN:-scip}"
 INSTANCES_DIR="$BBML_ROOT/benchmarks/instances"
 
 SEEDS="${COLLECT_SEEDS:-0 1 2}"
 TL="${COLLECT_TL:-3600}"
-MAX_NODES="${COLLECT_MAX_NODES:-5000}"   # cap nodes to control SB cost
+MAX_NODES="${COLLECT_MAX_NODES:-5000}"
+COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
+COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 
-# ---- discover instance lists ----
-# Accept an explicit list via INSTANCE_FAMILIES env var, otherwise auto-detect
-# all *_train.txt files in the instances directory.
+IFS=',' read -ra SPLIT_LIST <<< "$COLLECT_SPLITS"
+PY_LAUNCH_JSON="$(bbml_python_json_array)"
+
+families=()
 if [ -n "${INSTANCE_FAMILIES:-}" ]; then
-  IFS=',' read -ra FAMILY_FILES <<< "$INSTANCE_FAMILIES"
+  IFS=',' read -ra families <<< "$INSTANCE_FAMILIES"
 else
-  FAMILY_FILES=()
-  while IFS= read -r f; do FAMILY_FILES+=("$f"); done \
-    < <(find "$INSTANCES_DIR" -maxdepth 1 -name '*_train.txt' | sort)
+  while IFS= read -r list_file; do
+    families+=("$(basename "$list_file" | sed 's/_train\.txt$//')")
+  done < <(find "$INSTANCES_DIR" -maxdepth 1 -name '*_train.txt' | sort)
 fi
 
-if [ ${#FAMILY_FILES[@]} -eq 0 ]; then
-  echo "ERROR: no instance list files found in $INSTANCES_DIR"
-  echo ""
-  echo "Expected files (one .lp/.mps path per line):"
-  echo "  sc_train.txt   -- Set Covering       (10 000 instances)"
-  echo "  ca_train.txt   -- Combinatorial Auctions"
-  echo "  cfl_train.txt  -- Capacitated Facility Location"
-  echo "  mis_train.txt  -- Maximum Independent Set"
-  echo "  vrp_train.txt  -- VRP-MIP (optional)"
-  echo ""
-  echo "Generate synthetic families with:"
-  echo "  bash benchmarks/pipeline/00_generate.sh"
-  echo ""
-  echo "Or point to existing instances:"
-  echo "  ls /path/to/sc/*.lp > benchmarks/instances/sc_train.txt"
+if [ ${#families[@]} -eq 0 ]; then
+  echo "ERROR: no *_train.txt lists found in $INSTANCES_DIR"
   exit 1
 fi
 
-echo "=== SB telemetry collection ==="
-echo "  Families   : ${#FAMILY_FILES[@]}"
-echo "  Seeds      : $SEEDS"
-echo "  Max nodes  : $MAX_NODES"
-echo "  Time limit : ${TL}s"
+mkdir -p "$DATA_DIR/manifests" "$DATA_DIR/pipeline_logs/collect"
+
+echo "=== Telemetry collection ==="
+echo "  Families     : ${families[*]}"
+echo "  Splits       : ${SPLIT_LIST[*]}"
+echo "  Seeds        : $SEEDS"
+echo "  Time limit   : ${TL}s"
+echo "  Max nodes    : $MAX_NODES"
+echo "  Collect jobs : $COLLECT_JOBS"
+echo "  Runner       : $BBML_RUNNER_BIN"
 echo ""
 
-total_new=0; total_skip=0; total_fail=0
+for family in "${families[@]}"; do
+  for split in "${SPLIT_LIST[@]}"; do
+    list_file="$INSTANCES_DIR/${family}_${split}.txt"
+    [ ! -f "$list_file" ] && continue
+    manifest="$DATA_DIR/manifests/collect_${family}_${split}.jsonl"
+    echo "--- $family/$split ---"
+    FAMILY="$family" \
+    SPLIT="$split" \
+    LIST_FILE="$list_file" \
+    MANIFEST="$manifest" \
+    DATA_DIR="$DATA_DIR" \
+    SCRIPT="$SCRIPT_DIR/collect_task.py" \
+    PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
+    BBML_RUNNER="$BBML_RUNNER_BIN" \
+    SEEDS="$SEEDS" \
+    TL="$TL" \
+    MAX_NODES="$MAX_NODES" \
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
 
-for list_file in "${FAMILY_FILES[@]}"; do
-  family=$(basename "$list_file" _train.txt)
-  log_dir="$DATA_DIR/logs/$family"
-  mkdir -p "$log_dir"
+def instance_id(path: Path) -> str:
+    name = path.name
+    if name.endswith(".mps.gz"):
+        return name[:-7]
+    for suffix in (".lp", ".mps", ".gz"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
 
-  instances=()
-  while IFS= read -r line; do instances+=("$line"); done < "$list_file"
-  # Remove blank lines
-  instances=("${instances[@]/#$'\n'/}")
-  n_inst=0
-  for inst in "${instances[@]}"; do [ -n "$inst" ] && n_inst=$((n_inst+1)); done
+family = os.environ["FAMILY"]
+split = os.environ["SPLIT"]
+list_file = Path(os.environ["LIST_FILE"])
+manifest = Path(os.environ["MANIFEST"])
+data_dir = Path(os.environ["DATA_DIR"])
+script = os.environ["SCRIPT"]
+py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
+runner_bin = os.environ["BBML_RUNNER"]
+seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
+time_limit = os.environ["TL"]
+max_nodes = os.environ["MAX_NODES"]
 
-  echo "--- Family: $family ($n_inst instances) ---"
+candidate_dir = data_dir / "logs" / family / split / "candidates"
+graph_dir = data_dir / "logs" / family / split / "graph"
+scip_dir = data_dir / "logs" / family / split / "scip"
+for path in (candidate_dir, graph_dir, scip_dir):
+    path.mkdir(parents=True, exist_ok=True)
 
-  for inst in "${instances[@]}"; do
-    [ -z "$inst" ] && continue
-    id=$(basename "$inst" | sed 's/\.\(lp\|mps\|gz\)$//;s/\.mps\.gz$//')
-    for seed in $SEEDS; do
-      out="$log_dir/${id}_s${seed}.ndjson"
-      if [ -f "$out" ] && [ -s "$out" ]; then
-        total_skip=$((total_skip+1))
-        continue
-      fi
-      echo "  $family/$id  seed=$seed"
-      "$SCIP_BIN" \
-        -s "$BBML_ROOT/configs/solver/integration.yaml" \
-        -c "set branching/fullstrong/priority 1000000" \
-        -c "set limits/time $TL" \
-        -c "set limits/nodes $MAX_NODES" \
-        -c "set randomization/randomseedshift $seed" \
-        -c "set bbml/telemetry/logfile $out" \
-        -c "set bbml/telemetry/enabled TRUE" \
-        -c "set bbml/telemetry/strongbranch TRUE" \
-        -c "read $inst" \
-        -c "optimize" \
-        -c "quit" \
-        > "$log_dir/${id}_s${seed}.scip.log" 2>&1 \
-        && total_new=$((total_new+1)) \
-        || { echo "    WARNING: SCIP failed (check $log_dir/${id}_s${seed}.scip.log)"; total_fail=$((total_fail+1)); }
-    done
+manifest.parent.mkdir(parents=True, exist_ok=True)
+with list_file.open() as src, manifest.open("w") as out:
+    for line in src:
+        inst = line.strip()
+        if not inst:
+            continue
+        inst_path = Path(inst)
+        iid = instance_id(inst_path)
+        for seed in seeds:
+            candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
+            graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
+            scip_log = scip_dir / f"{iid}_s{seed}.log"
+            skip = candidate_out.is_file() and candidate_out.stat().st_size > 0 and graph_out.is_file() and graph_out.stat().st_size > 0
+            rec = {
+                "name": f"collect:{family}:{split}:{iid}:s{seed}",
+                "cmd": py_launch
+                + [
+                    script,
+                    "--runner-bin",
+                    runner_bin,
+                    "--instance",
+                    inst,
+                    "--seed",
+                    seed,
+                    "--time-limit",
+                    time_limit,
+                    "--max-nodes",
+                    max_nodes,
+                    "--candidate-out",
+                    str(candidate_out),
+                    "--graph-out",
+                    str(graph_out),
+                    "--scip-log",
+                    str(scip_log),
+                ],
+                "cwd": os.getcwd(),
+                "log_path": str(data_dir / "pipeline_logs" / "collect" / f"{family}_{split}_{iid}_s{seed}.log"),
+                "skip": skip,
+            }
+            out.write(json.dumps(rec) + "\n")
+PY
+    bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$COLLECT_JOBS"
+    echo ""
   done
 done
 
-echo ""
 echo "Collection complete."
-echo "  Collected : $total_new   Skipped (cached): $total_skip   Failed: $total_fail"
-echo "  Output    : $DATA_DIR/logs/{family}/"

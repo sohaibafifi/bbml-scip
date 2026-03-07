@@ -2,7 +2,7 @@ import pandas as pd
 from bbml.train.train_rank import NodeDataset, DEFAULT_FEATS
 
 
-def test_node_dataset_grouping():
+def test_node_dataset_grouping(tmp_path):
     # Build a tiny dataframe with two nodes and simple features
     rows = []
     for nid in [1, 2]:
@@ -21,9 +21,9 @@ def test_node_dataset_grouping():
                 }
             )
     df = pd.DataFrame(rows)
-    path = "data/test_df.parquet"
+    path = tmp_path / "test_df.parquet"
     df.to_parquet(path, index=False)
-    ds = NodeDataset(path, feature_cols=DEFAULT_FEATS)
+    ds = NodeDataset(str(path), feature_cols=DEFAULT_FEATS)
     assert len(ds) == 2
     # Should infer chosen index from column
     for grp in ds:

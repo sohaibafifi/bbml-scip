@@ -10,7 +10,7 @@ Usage:
         --results results/runs \\
         --out paper/figures/ \\
         --metric time nodes \\
-        --solvers scip-default pure-imitation bbml-full
+        --solvers scip-default bbml-mlp bbml-gnn-graph
 """
 import argparse
 import json
@@ -28,19 +28,18 @@ TIME_LIMIT = 3600.0
 SOLVER_STYLES = {
     "scip-default": dict(color="#555555", ls="--", lw=1.5, label="SCIP default"),
     "strong-branch": dict(color="#000000", ls=":", lw=1.5, label="Strong branching (oracle)"),
-    "gcnn-gasse19": dict(color="#E69F00", ls="-.", lw=1.5, label="GCNN Gasse'19"),
-    "pure-imitation": dict(color="#D55E00", ls="-", lw=1.5, label="Pure imitation"),
-    "alpha-fixed-0.5": dict(color="#F0E442", ls="-", lw=1.5, label=r"Fixed $\alpha{=}0.5$"),
-    "tabular-xgb": dict(color="#0072B2", ls="-.", lw=1.5, label="Tabular XGBoost"),
-    "bbml-nonode": dict(color="#CC79A7", ls="-", lw=2.0, label="BBML (no nodesel)"),
-    "bbml-full": dict(color="#009E73", ls="-", lw=2.5, label=r"\textbf{BBML (ours)}"),
+    "bbml-mlp": dict(color="#D55E00", ls="-", lw=1.5, label="BBML MLP"),
+    "bbml-gnn-varonly": dict(color="#0072B2", ls="-.", lw=1.5, label="BBML GNN var-only"),
+    "bbml-gnn-graph": dict(color="#009E73", ls="-", lw=2.5, label="BBML GNN graph"),
+    "bbml-gnn-graph-fp32": dict(color="#CC79A7", ls="--", lw=1.5, label="BBML GNN FP32"),
+    "bbml-gnn-graph-fp16": dict(color="#F0E442", ls="-", lw=1.5, label="BBML GNN FP16"),
 }
 
 
 def load_results(results_dir: Path) -> pd.DataFrame:
     rows = []
-    for jl in sorted(results_dir.glob("*.jsonl")):
-        with open(jl) as f:
+    for path in sorted(results_dir.rglob("*.json")) + sorted(results_dir.rglob("*.jsonl")):
+        with open(path) as f:
             for line in f:
                 line = line.strip()
                 if not line:

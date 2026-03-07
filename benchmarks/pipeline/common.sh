@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+
+bbml_cpu_count() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import os
+print(os.cpu_count() or 1)
+PY
+    return
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+    return
+  fi
+  echo 1
+}
+
+bbml_default_generate_jobs() {
+  local cpu
+  cpu="$(bbml_cpu_count)"
+  if [ "$cpu" -lt 4 ]; then
+    echo "$cpu"
+  else
+    echo 4
+  fi
+}
+
+bbml_default_solver_jobs() {
+  local cpu half
+  cpu="$(bbml_cpu_count)"
+  half=$((cpu / 2))
+  if [ "$half" -lt 1 ]; then
+    half=1
+  fi
+  if [ "$half" -gt 4 ]; then
+    half=4
+  fi
+  echo "$half"
+}
+
+bbml_resolve_python() {
+  if [ -n "${BBML_PYTHON:-}" ]; then
+    PYTHON_CMD=("$BBML_PYTHON")
+    return
+  fi
+  if [ -x "$BBML_ROOT/py/.venv/bin/python" ]; then
+    PYTHON_CMD=("$BBML_ROOT/py/.venv/bin/python")
+    return
+  fi
+  PYTHON_CMD=(uv run --project "$BBML_ROOT/py" python)
+}
+
+bbml_resolve_runner() {
+  if [ -n "${BBML_RUNNER:-}" ] && [ -x "${BBML_RUNNER}" ]; then
+    BBML_RUNNER_BIN="${BBML_RUNNER}"
+    return
+  fi
+  if [ -x "$BBML_ROOT/build/bbml_run" ]; then
+    BBML_RUNNER_BIN="$BBML_ROOT/build/bbml_run"
+    return
+  fi
+  if [ -x "$BBML_ROOT/build/cpp-tests/bbml_run" ]; then
+    BBML_RUNNER_BIN="$BBML_ROOT/build/cpp-tests/bbml_run"
+    return
+  fi
+  BBML_RUNNER_BIN=""
+}
+
+bbml_verify_runner() {
+  if [ -z "${BBML_RUNNER_BIN:-}" ]; then
+    echo "ERROR: BBML_RUNNER_BIN is empty." >&2
+    exit 1
+  fi
+  if [ "${BBML_RUNNER_CHECKED:-}" = "$BBML_RUNNER_BIN" ]; then
+    return
+  fi
+  if [ ! -f "$BBML_ROOT/examples/data/branching.lp" ]; then
+    echo "ERROR: probe instance missing: $BBML_ROOT/examples/data/branching.lp" >&2
+    exit 1
+  fi
+
+  local probe_out probe_rc
+  probe_out="$("$BBML_RUNNER_BIN" \
+    --problem "$BBML_ROOT/examples/data/branching.lp" \
+    --param 'bbml/enable=FALSE' \
+    --param 'bbml/telemetry=FALSE' \
+    --param 'limits/time=1' \
+    2>&1)" && probe_rc=0 || probe_rc=$?
+
+  if [ "$probe_rc" -ne 0 ] || ! printf '%s' "$probe_out" | grep -q 'BBML_SUMMARY'; then
+    echo "ERROR: $BBML_RUNNER_BIN is not a BBML-enabled bbml_run executable." >&2
+    echo "Set BBML_RUNNER to the built runner, for example:" >&2
+    echo "  export BBML_RUNNER=\"$BBML_ROOT/build/bbml_run\"" >&2
+    echo "Probe output:" >&2
+    printf '%s\n' "$probe_out" | sed -n '1,20p' >&2
+    exit 1
+  fi
+
+  BBML_RUNNER_CHECKED="$BBML_RUNNER_BIN"
+}
+
+bbml_require_runner() {
+  bbml_resolve_runner
+  if [ -z "${BBML_RUNNER_BIN:-}" ]; then
+    echo "ERROR: bbml_run not found. Build the project first or set BBML_RUNNER." >&2
+    exit 1
+  fi
+  bbml_verify_runner
+}
+
+bbml_python() {
+  "${PYTHON_CMD[@]}" "$@"
+}
+
+bbml_python_json_array() {
+  python3 - "${PYTHON_CMD[@]}" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1:]))
+PY
+}
+
+bbml_abs_path() {
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PY
+}

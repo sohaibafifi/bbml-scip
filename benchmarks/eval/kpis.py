@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compute benchmark KPIs from SCIP solve logs.
 
-Reads all *.jsonl files under --results, computes per-solver KPIs:
+Reads all per-run JSON files under --results, computes per-solver KPIs:
   - Shifted geometric mean (SGM) of solve time and node count
   - % instances solved to optimality
   - Wilcoxon signed-rank test vs. a chosen baseline
@@ -35,8 +35,8 @@ def shifted_geo_mean(vals: np.ndarray, shift: float) -> float:
 
 def load_results(results_dir: Path) -> pd.DataFrame:
     rows = []
-    for jl in sorted(results_dir.glob("*.jsonl")):
-        with open(jl) as f:
+    for path in sorted(results_dir.rglob("*.json")) + sorted(results_dir.rglob("*.jsonl")):
+        with open(path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -46,7 +46,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
                 except json.JSONDecodeError:
                     pass
     if not rows:
-        raise ValueError(f"No result lines found in {results_dir}")
+        raise ValueError(f"No result records found in {results_dir}")
     return pd.DataFrame(rows)
 
 
@@ -141,7 +141,7 @@ def compute_kpis(
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--results", required=True, type=Path, help="Dir with *.jsonl run files")
+    ap.add_argument("--results", required=True, type=Path, help="Dir with recursive per-run JSON files")
     ap.add_argument("--instance-sets", type=Path, default=None, help="Dir with instance list *.txt files (for set tagging)")
     ap.add_argument("--baseline", default="scip-default", help="Reference solver for Wilcoxon")
     ap.add_argument("--out", required=True, type=Path, help="Output CSV path")

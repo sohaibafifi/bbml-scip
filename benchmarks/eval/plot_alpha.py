@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Plot alpha distribution vs. tree depth and condition-number fallback rate.
+"""Experimental alpha-log plotting helper.
 
-Reads alpha log CSVs produced by the BBML branchrule (one file per run).
+Reads alpha log CSVs produced by custom branchrule instrumentation.
+The default benchmark pipeline does not emit these logs.
 Expected CSV columns: depth, alpha, conf, cond_est, fallback
 
 Usage:
     uv run python benchmarks/eval/plot_alpha.py \\
         --logs results/alpha_logs \\
         --out paper/figures/ \\
-        --solver bbml-full
+        --solver bbml-gnn-graph
 """
 import argparse
 from pathlib import Path
@@ -116,10 +117,10 @@ def plot_confidence_dist(df: pd.DataFrame, out_path: Path):
         return
     fig, ax = plt.subplots(figsize=(4.5, 3.2))
     ax.hist(df["conf"].dropna().clip(0, 1), bins=50, color="#009E73", alpha=0.7, edgecolor="white")
-    ax.axvline(0.3, color="red", ls="--", lw=1.5, label=r"$\theta=0.3$ (gate threshold)")
+    ax.axvline(0.5, color="red", ls="--", lw=1.5, label=r"$c=0.5$ (default confidence)")
     ax.set_xlabel(r"Node confidence $\hat{c}(N)$")
     ax.set_ylabel("Count")
-    ax.set_title("MC-dropout confidence distribution")
+    ax.set_title("Confidence distribution")
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3, linestyle=":")
     fig.tight_layout()
@@ -132,7 +133,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--logs", required=True, type=Path, help="Dir with alpha log CSVs")
     ap.add_argument("--out", required=True, type=Path, help="Output directory for figures")
-    ap.add_argument("--solver", default="bbml-full", help="Solver tag used in filenames")
+    ap.add_argument("--solver", default="bbml-gnn-graph", help="Solver tag used in filenames")
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)

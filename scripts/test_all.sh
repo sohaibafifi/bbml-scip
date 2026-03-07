@@ -6,17 +6,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT_DIR/py:${PYTHONPATH:-}"
 
 echo "[1/2] Running Python tests..."
-PY=""
-if command -v python3 >/dev/null 2>&1; then PY=python3; fi
-if [ -z "$PY" ] && command -v python >/dev/null 2>&1; then PY=python; fi
-if [ -z "$PY" ]; then
-  echo "Python not found; skipping Python tests"
+if [ -n "${BBML_PYTHON:-}" ]; then
+  (cd "$ROOT_DIR" && "$BBML_PYTHON" "$ROOT_DIR/scripts/run_py_tests.py" "$ROOT_DIR/tests/py") || echo "Python tests failed"
+elif [ -x "$ROOT_DIR/py/.venv/bin/python" ]; then
+  (cd "$ROOT_DIR" && "$ROOT_DIR/py/.venv/bin/python" "$ROOT_DIR/scripts/run_py_tests.py" "$ROOT_DIR/tests/py") || echo "Python tests failed"
+elif command -v python3 >/dev/null 2>&1; then
+  (cd "$ROOT_DIR" && python3 "$ROOT_DIR/scripts/run_py_tests.py" "$ROOT_DIR/tests/py") || echo "Python tests failed"
 else
-  if command -v pytest >/dev/null 2>&1; then
-    (cd "$ROOT_DIR" && pytest -q tests/py) || echo "Python tests failed"
-  else
-    (cd "$ROOT_DIR" && "$PY" -m pytest -q tests/py) || echo "pytest not installed or tests failed; skipping Python tests"
-  fi
+  echo "Python not found; skipping Python tests"
 fi
 
 echo "[2/2] Building and running C++ tests..."

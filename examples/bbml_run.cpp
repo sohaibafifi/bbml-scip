@@ -7,18 +7,41 @@
 #include <iostream>
 #include <cstdint>
 #include <cinttypes>
+#include <algorithm>
 
 #include "scip/scip.h"
 #include "scip/scipdefplugins.h"
+#include "scip/pub_paramset.h"
 #include "bbml/branchrule_ml.hpp"
 #include "bbml/nodesel_ml.hpp"
 
 namespace {
 
-void set_param(SCIP* scip, const std::string& kv) {
+bool parse_bool_value(const std::string& val, SCIP_Bool* out) {
+  if (val == "TRUE" || val == "true" || val == "1") {
+    *out = TRUE;
+    return true;
+  }
+  if (val == "FALSE" || val == "false" || val == "0") {
+    *out = FALSE;
+    return true;
+  }
+  return false;
+}
+
+void strip_quotes(std::string* val) {
+  if (val->size() >= 2 &&
+      ((val->front() == '"' && val->back() == '"') ||
+       (val->front() == '\'' && val->back() == '\''))) {
+    *val = val->substr(1, val->size() - 2);
+  }
+}
+
+bool set_param(SCIP* scip, const std::string& kv) {
   auto pos = kv.find('=');
   if (pos == std::string::npos) {
-    return;
+    std::cerr << "Invalid --param (expected name=value): " << kv << "\n";
+    return false;
   }
   std::string name = kv.substr(0, pos);
   std::string val = kv.substr(pos + 1);
@@ -34,30 +57,67 @@ void set_param(SCIP* scip, const std::string& kv) {
   };
   trim(name);
   trim(val);
-  // heuristic: detect type
-  if (val == "TRUE" || val == "true" || val == "1") {
-    SCIPsetBoolParam(scip, name.c_str(), TRUE);
-  } else if (val == "FALSE" || val == "false" || val == "0") {
-    SCIPsetBoolParam(scip, name.c_str(), FALSE);
-  } else {
-    char* end = nullptr;
-    int64_t li = static_cast<int64_t>(strtoll(val.c_str(), &end, 10));
-    if (end && *end == '\0') {
-      SCIPsetIntParam(scip, name.c_str(), static_cast<int>(li));
-      return;
-    }
-    end = nullptr;
-    double d = strtod(val.c_str(), &end);
-    if (end && *end == '\0') {
-      SCIPsetRealParam(scip, name.c_str(), d);
-      return;
-    }
-    SCIPsetStringParam(scip, name.c_str(), const_cast<char*>(val.c_str()));
+  SCIP_PARAM* param = SCIPgetParam(scip, name.c_str());
+  if (param == nullptr) {
+    std::cerr << "Unknown SCIP parameter: " << name << "\n";
+    return false;
   }
+
+  switch (SCIPparamGetType(param)) {
+    case SCIP_PARAMTYPE_BOOL: {
+      SCIP_Bool b = FALSE;
+      if (!parse_bool_value(val, &b)) {
+        std::cerr << "Invalid bool value for " << name << ": " << val << "\n";
+        return false;
+      }
+      return SCIPsetBoolParam(scip, name.c_str(), b) == SCIP_OKAY;
+    }
+    case SCIP_PARAMTYPE_INT: {
+      char* end = nullptr;
+      long parsed = strtol(val.c_str(), &end, 10);
+      if (!(end && *end == '\0')) {
+        std::cerr << "Invalid int value for " << name << ": " << val << "\n";
+        return false;
+      }
+      return SCIPsetIntParam(scip, name.c_str(), static_cast<int>(parsed)) == SCIP_OKAY;
+    }
+    case SCIP_PARAMTYPE_LONGINT: {
+      char* end = nullptr;
+      int64_t parsed = static_cast<int64_t>(strtoll(val.c_str(), &end, 10));
+      if (!(end && *end == '\0')) {
+        std::cerr << "Invalid longint value for " << name << ": " << val << "\n";
+        return false;
+      }
+      return SCIPsetLongintParam(scip, name.c_str(), static_cast<SCIP_Longint>(parsed)) == SCIP_OKAY;
+    }
+    case SCIP_PARAMTYPE_REAL: {
+      char* end = nullptr;
+      double parsed = strtod(val.c_str(), &end);
+      if (!(end && *end == '\0')) {
+        std::cerr << "Invalid real value for " << name << ": " << val << "\n";
+        return false;
+      }
+      return SCIPsetRealParam(scip, name.c_str(), parsed) == SCIP_OKAY;
+    }
+    case SCIP_PARAMTYPE_CHAR: {
+      strip_quotes(&val);
+      if (val.empty()) {
+        std::cerr << "Invalid char value for " << name << ": " << val << "\n";
+        return false;
+      }
+      return SCIPsetCharParam(scip, name.c_str(), val[0]) == SCIP_OKAY;
+    }
+    case SCIP_PARAMTYPE_STRING: {
+      strip_quotes(&val);
+      return SCIPsetStringParam(scip, name.c_str(), const_cast<char*>(val.c_str())) == SCIP_OKAY;
+    }
+  }
+  std::cerr << "Unsupported parameter type for " << name << "\n";
+  return false;
 }
 
 void usage() {
-  std::cerr << "Usage: bbml_run --plugin <lib> --problem <file> [--set file.set]* [--param name=value]*\n";
+  std::cerr << "Usage: bbml_run --problem <file> [--set file.set]* [--param name=value]*\n";
 }
 
 }  // namespace
@@ -86,6 +146,9 @@ int main(int argc, char** argv) {
     usage();
     return 2;
   }
+  if (!plugin.empty()) {
+    std::cerr << "Warning: --plugin is ignored; bbml_run already includes the BBML plugins.\n";
+  }
 
   SCIP* scip = nullptr;
   if (SCIPcreate(&scip) != SCIP_OKAY) {
@@ -105,7 +168,10 @@ int main(int argc, char** argv) {
 
   // Apply inline params
   for (const auto& kv : kvparams) {
-    set_param(scip, kv);
+    if (!set_param(scip, kv)) {
+      SCIPfree(&scip);
+      return 2;
+    }
   }
   // Apply .set files using SCIP native parser
   for (const auto& sf : setfiles) {
@@ -116,10 +182,6 @@ int main(int argc, char** argv) {
     std::cerr << "SCIPcreateProbBasic failed" << std::endl;
     return 1;
   }
-  // Turn off presolving, heuristics, and separating to encourage branching in examples
-  (void)SCIPsetPresolving(scip, SCIP_PARAMSETTING_OFF, TRUE);
-  (void)SCIPsetHeuristics(scip, SCIP_PARAMSETTING_OFF, TRUE);
-  (void)SCIPsetSeparating(scip, SCIP_PARAMSETTING_OFF, TRUE);
   if (SCIPreadProb(scip, problem.c_str(), nullptr) != SCIP_OKAY) {
     std::cerr << "SCIPreadProb failed" << std::endl;
     return 1;

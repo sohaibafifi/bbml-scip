@@ -1,6 +1,5 @@
 ROOT := $(abspath ..)
 BUILD := $(ROOT)/build
-PLUGIN_SO := $(BUILD)/cpp/libbbml_scip.so
 RUNNER := $(BUILD)/bbml_run
 OUT := out
 MODEL ?= mlp
@@ -21,7 +20,7 @@ scip-log: build
 	BBML_TELEMETRY_PATH=$(ROOT)/examples/$(OUT)/train.ndjson \
 	BBML_INSTANCE_ID=toy \
 	sh -lc 'mkdir -p $(OUT) && printf "bbml/enable = TRUE\nbbml/telemetry = TRUE\nbbml/telemetry/path = \"$(ROOT)/examples/$(OUT)/train.ndjson\"\nbbml/telemetry/graph = %s\nbbml/telemetry/graph_path = \"$(ROOT)/examples/$(OUT)/train_graph.ndjson\"\nbbml/telemetry/append = FALSE\nlimits/time = $(TIME)\nlimits/nodes = $(NODES)\n" $$([ "$(GRAPH)" = "1" ] && echo TRUE || echo FALSE) > $(OUT)/bbml_train.set' && \
-	$(RUNNER) --plugin $(PLUGIN_SO) --problem $(ROOT)/examples/data/branching.lp --set $(OUT)/bbml_train.set
+	$(RUNNER) --problem $(ROOT)/examples/data/branching.lp --set $(OUT)/bbml_train.set
 
 parquet: scip-log
 	@in=$(OUT)/train.ndjson; \
@@ -44,7 +43,7 @@ scip-ml: build
 	BBML_TELEMETRY_PATH=$(ROOT)/examples/$(OUT)/online.ndjson \
 	BBML_INSTANCE_ID=toy-ml \
 	sh -lc 'mkdir -p $(OUT) && printf "bbml/enable = TRUE\nbbml/telemetry = TRUE\nbbml/model_path = $(ROOT)/examples/$(SCORE)\nbbml/confidence = 0.6\nbbml/reload = 1\nbbml/telemetry/path = \"$(ROOT)/examples/$(OUT)/online.ndjson\"\nbbml/telemetry/append = FALSE\nlimits/time = $(TIME)\nlimits/nodes = $(NODES)\n" > $(OUT)/bbml_online.set' && \
-	$(RUNNER) --plugin $(PLUGIN_SO) --problem $(ROOT)/examples/data/branching.lp --set $(OUT)/bbml_online.set
+	$(RUNNER) --problem $(ROOT)/examples/data/branching.lp --set $(OUT)/bbml_online.set
 
 pipeline: train-export scip-ml
 
@@ -59,7 +58,7 @@ scip-log-train: build
   printf "bbml/enable = TRUE\nbbml/telemetry = TRUE\nbbml/telemetry/path = \"$(ROOT)/examples/$(OUT)/train.ndjson\"\nbbml/telemetry/graph = %s\nbbml/telemetry/graph_path = \"$(ROOT)/examples/$(OUT)/train_graph.ndjson\"\nbbml/telemetry/append = %s\nbbml/telemetry/strongbranch = FALSE\nlimits/time = $(TIME)\nlimits/nodes = $(NODES)\n" $$([ "$(GRAPH)" = "1" ] && echo TRUE || echo FALSE) $$append > $(OUT)/bbml_train_batch.set; \
 	  BBML_TELEMETRY_PATH=$(ROOT)/examples/$(OUT)/train.ndjson \
 	  BBML_INSTANCE_ID=train \
-	  $(RUNNER) --plugin $(PLUGIN_SO) --problem $$f --set $(OUT)/bbml_train_batch.set; \
+	  $(RUNNER) --problem $$f --set $(OUT)/bbml_train_batch.set; \
 	  first=0; \
 	done
 
@@ -74,7 +73,7 @@ scip-log-val: build
   printf "bbml/enable = TRUE\nbbml/telemetry = TRUE\nbbml/telemetry/path = \"$(ROOT)/examples/$(OUT)/val.ndjson\"\nbbml/telemetry/graph = %s\nbbml/telemetry/graph_path = \"$(ROOT)/examples/$(OUT)/val_graph.ndjson\"\nbbml/telemetry/append = %s\nbbml/telemetry/strongbranch = FALSE\nlimits/time = $(TIME)\nlimits/nodes = $(NODES)\n" $$([ "$(GRAPH)" = "1" ] && echo TRUE || echo FALSE) $$append > $(OUT)/bbml_val_batch.set; \
 	  BBML_TELEMETRY_PATH=$(ROOT)/examples/$(OUT)/val.ndjson \
 	  BBML_INSTANCE_ID=val \
-	  $(RUNNER) --plugin $(PLUGIN_SO) --problem $$f --set $(OUT)/bbml_val_batch.set; \
+	  $(RUNNER) --problem $$f --set $(OUT)/bbml_val_batch.set; \
 	  first=0; \
 	done
 
@@ -90,7 +89,7 @@ benchmark: #train-export parquet-val
 	@for f in $(ROOT)/examples/data/val/*.lp; do \
 	  echo "[benchmark] $$f"; \
   printf "bbml/enable = TRUE\nbbml/telemetry = FALSE\nbbml/model_path = \"$(ROOT)/examples/$(SCORE)\"\nlimits/time = $(TIME)\nlimits/nodes = $(NODES)\n" > $(OUT)/bbml_bench.set; \
-	  OUTSTR=`$(RUNNER) --plugin $(PLUGIN_SO) --problem $$f --set $(OUT)/bbml_bench.set`; \
+	  OUTSTR=`$(RUNNER) --problem $$f --set $(OUT)/bbml_bench.set`; \
 	  echo "$$OUTSTR" | awk -v T=$(TIME) '/BBML_SUMMARY/ { \
 	    for(i=1;i<=NF;i++){ split($$i, kv, "="); if(kv[1]=="nodes") nodes=kv[2]; else if(kv[1]=="time") time=kv[2]; else if(kv[1]=="gap") gap=kv[2]; else if(kv[1]=="primal_integral") pint=kv[2]; else if(kv[1]=="solved") solved=kv[2]; } \
 	    if(nodes==""||nodes==0) nodes=0; if(time==""||time==0) time=0; if(gap=="" ) gap=1; if(pint=="" ) pint=0; if(solved=="") solved=0; \
@@ -113,7 +112,7 @@ benchmark-nobbml: #parquet-val
 	@for f in $(ROOT)/examples/data/val/*.lp; do \
 	  echo "[baseline] $$f"; \
 	  printf "bbml/enable = FALSE\nbbml/telemetry = FALSE\nlimits/time = $(TIME)\nlimits/nodes = $(NODES)\n" > $(OUT)/bbml_bench_nobbml.set; \
-	  OUTSTR=`$(RUNNER) --plugin $(PLUGIN_SO) --problem $$f --set $(OUT)/bbml_bench_nobbml.set`; \
+	  OUTSTR=`$(RUNNER) --problem $$f --set $(OUT)/bbml_bench_nobbml.set`; \
 	  echo "$$OUTSTR" | awk -v T=$(TIME) '/BBML_SUMMARY/ { \
 	    for(i=1;i<=NF;i++){ split($$i, kv, "="); if(kv[1]=="nodes") nodes=kv[2]; else if(kv[1]=="time") time=kv[2]; else if(kv[1]=="gap") gap=kv[2]; else if(kv[1]=="primal_integral") pint=kv[2]; else if(kv[1]=="solved") solved=kv[2]; } \
 	    if(nodes==""||nodes==0) nodes=0; if(time==""||time==0) time=0; if(gap=="" ) gap=1; if(pint=="" ) pint=0; if(solved=="") solved=0; \
