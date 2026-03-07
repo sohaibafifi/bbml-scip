@@ -7,6 +7,11 @@ This folder shows minimal flows for MLP and GNN models.
 - Python: `pip install -e ./py pytest`
 - LP files (e.g., from MIPLIB or Netlib) in data/train and data/val
 
+## Build entrypoint
+- Build from the repository root with CMake or from this folder with `make build`.
+- Do not run `cmake ..` inside `examples/`; this folder is a demo workspace with its own checked-in `Makefile`, not a standalone CMake project.
+- For ONNX support, either set `ONNXRUNTIME_DIR` explicitly or place an unpacked ONNX Runtime release under `libs/onnxruntime-*`.
+
 ##  Makefile knobs
 - `MODEL` = `mlp` or `gnn` (default: `mlp`)
 - `GRAPH` = `1` to log graph snapshots and train a graph-input GNN

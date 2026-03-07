@@ -37,7 +37,7 @@ bb-ml/
 
 ```bash
 # 1. Build C++ plugin (requires SCIP_DIR)
-cmake -S . -B build && cmake --build build
+cmake -S . -B build -DBBML_WITH_ONNX=ON && cmake --build build
 
 # 2. Install Python package
 uv pip install -e ./py      # or: pip install -e ./py
@@ -51,6 +51,11 @@ make -C examples scip-log-train GRAPH=1
 make -C examples MODEL=gnn GRAPH=1 train-export
 make -C examples MODEL=gnn GRAPH=1 scip-ml
 ```
+
+If you want ONNX support, run CMake from the repository root and either set
+`ONNXRUNTIME_DIR` to an unpacked ONNX Runtime release or place that release
+under `libs/onnxruntime-*`. The `examples/` folder is driven by its `Makefile`;
+it is not a standalone CMake source directory.
 
 Makefile knobs: `MODEL=mlp|gnn`, `GRAPH=0|1`, `TIME=<seconds>`, `NODES=<max>`.
 

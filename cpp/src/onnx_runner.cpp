@@ -8,7 +8,7 @@
 #ifdef BBML_WITH_ONNX
 #include <array>
 #include <cstring>
-#include "onnxruntime/core/session/onnxruntime_cxx_api.h"
+#include "onnxruntime_cxx_api.h"
 #endif
 
 namespace bbml {
