@@ -139,20 +139,37 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   // optional strong-branch scores for telemetry
   std::vector<double> sb_up, sb_down;
   if (telemetry && tlogsb) {
-    (void)SCIPstartStrongbranch(scip, TRUE);
     sb_up.resize(nc, 0.0);
     sb_down.resize(nc, 0.0);
-    for (int i = 0; i < nc; ++i) {
-      SCIP_Real down = 0.0, up = 0.0;
-      SCIP_Bool downvalid = FALSE, upvalid = FALSE, downinf = FALSE, upinf = FALSE,
-                dc = FALSE, uc = FALSE, lperr = FALSE;
-      (void)SCIPgetVarStrongbranchFrac(scip, cands[i], -1, TRUE,
-                                       &down, &up, &downvalid, &upvalid,
-                                       &downinf, &upinf, &dc, &uc, &lperr);
-      sb_down[i] = down;
-      sb_up[i] = up;
+    std::vector<SCIP_Real> downvals(static_cast<size_t>(nc), 0.0);
+    std::vector<SCIP_Real> upvals(static_cast<size_t>(nc), 0.0);
+    std::vector<SCIP_Bool> downvalid(static_cast<size_t>(nc), FALSE);
+    std::vector<SCIP_Bool> upvalid(static_cast<size_t>(nc), FALSE);
+    std::vector<SCIP_Bool> downinf(static_cast<size_t>(nc), FALSE);
+    std::vector<SCIP_Bool> upinf(static_cast<size_t>(nc), FALSE);
+    std::vector<SCIP_Bool> downconflict(static_cast<size_t>(nc), FALSE);
+    std::vector<SCIP_Bool> upconflict(static_cast<size_t>(nc), FALSE);
+    SCIP_Bool lperr = FALSE;
+    SCIP_RETCODE sbrc = SCIPgetVarsStrongbranchesFrac(
+        scip,
+        cands,
+        nc,
+        -1,
+        downvals.data(),
+        upvals.data(),
+        downvalid.data(),
+        upvalid.data(),
+        downinf.data(),
+        upinf.data(),
+        downconflict.data(),
+        upconflict.data(),
+        &lperr);
+    if (sbrc == SCIP_OKAY && !lperr) {
+      for (int i = 0; i < nc; ++i) {
+        sb_down[static_cast<size_t>(i)] = static_cast<double>(downvals[static_cast<size_t>(i)]);
+        sb_up[static_cast<size_t>(i)] = static_cast<double>(upvals[static_cast<size_t>(i)]);
+      }
     }
-    (void)SCIPendStrongbranch(scip);
   }
   // telemetry: log candidate set for this node
   if (telemetry) {
