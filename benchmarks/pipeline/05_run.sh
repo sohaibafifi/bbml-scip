@@ -52,7 +52,16 @@ if [[ ",$METHODS," == *",strong-branch,"* ]]; then
   fi
 fi
 
-PY_LAUNCH_JSON="$(bbml_python_json_array)"
+PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:]))
+PY
+)"
+if [ -z "$PY_LAUNCH_JSON" ]; then
+  echo "ERROR: failed to resolve Python launcher command." >&2
+  exit 1
+fi
 manifest="$MANIFEST_DIR/run_tasks.jsonl"
 
 echo "=== Benchmark run ==="
@@ -182,7 +191,7 @@ with manifest.open("w") as fh:
                     )
 PY
 
-bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$RUN_JOBS"
+"${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$RUN_JOBS"
 
 echo ""
 echo "Runs complete. Results in $RUNS_DIR"

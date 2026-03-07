@@ -27,7 +27,16 @@ for arg in "$@"; do
 done
 
 IFS=',' read -ra FAM_LIST <<< "$FAMILIES"
-PY_LAUNCH_JSON="$(bbml_python_json_array)"
+PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:]))
+PY
+)"
+if [ -z "$PY_LAUNCH_JSON" ]; then
+  echo "ERROR: failed to resolve Python launcher command." >&2
+  exit 1
+fi
 
 echo "=== Instance generation ==="
 echo "  Families            : $FAMILIES"
@@ -123,7 +132,7 @@ with manifest.open("w") as fh:
         fh.write(json.dumps(rec) + "\n")
 PY
       if [ -s "$manifest" ]; then
-        bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$GENERATE_JOBS"
+        "${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$GENERATE_JOBS"
       fi
     fi
 

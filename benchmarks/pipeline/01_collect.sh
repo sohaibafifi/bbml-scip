@@ -18,7 +18,16 @@ COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 
 IFS=',' read -ra SPLIT_LIST <<< "$COLLECT_SPLITS"
-PY_LAUNCH_JSON="$(bbml_python_json_array)"
+PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:]))
+PY
+)"
+if [ -z "$PY_LAUNCH_JSON" ]; then
+  echo "ERROR: failed to resolve Python launcher command." >&2
+  exit 1
+fi
 
 families=()
 if [ -n "${INSTANCE_FAMILIES:-}" ]; then
@@ -136,7 +145,7 @@ with list_file.open() as src, manifest.open("w") as out:
             }
             out.write(json.dumps(rec) + "\n")
 PY
-    bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$COLLECT_JOBS"
+    "${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$COLLECT_JOBS"
     echo ""
   done
 done

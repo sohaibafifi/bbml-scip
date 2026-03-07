@@ -35,7 +35,7 @@ echo "  Dropout   : $DROPOUT"
 echo ""
 
 echo "[1/3] Training graph GNN from aggregate graph manifests..."
-bbml_python -m bbml.train.train_rank \
+"${PYTHON_CMD[@]}" -m bbml.train.train_rank \
   --model gnn \
   --graph_manifest "$GRAPH_TRAIN_MANIFEST" \
   --epochs "$EPOCHS" \
@@ -48,7 +48,7 @@ bbml_python -m bbml.train.train_rank \
   --ckpt_best "$MODEL_DIR/bbml_gnn_graph_best.pt"
 
 echo "[2/3] Training var-only GNN from aggregate parquet..."
-bbml_python -m bbml.train.train_rank \
+"${PYTHON_CMD[@]}" -m bbml.train.train_rank \
   --model gnn \
   --parquet "$TRAIN_PARQUET" \
   --epochs "$EPOCHS" \
@@ -61,7 +61,7 @@ bbml_python -m bbml.train.train_rank \
   --ckpt_best "$MODEL_DIR/bbml_gnn_varonly_best.pt"
 
 echo "[3/3] Training MLP from aggregate parquet..."
-bbml_python -m bbml.train.train_rank \
+"${PYTHON_CMD[@]}" -m bbml.train.train_rank \
   --model mlp \
   --parquet "$TRAIN_PARQUET" \
   --epochs "$EPOCHS" \

@@ -14,7 +14,16 @@ PARQUET_DIR="$DATA_DIR/parquet"
 MANIFEST_DIR="$DATA_DIR/manifests"
 CONVERT_SPLITS="${CONVERT_SPLITS:-train,val}"
 CONVERT_JOBS="${CONVERT_JOBS:-$(bbml_default_generate_jobs)}"
-PY_LAUNCH_JSON="$(bbml_python_json_array)"
+PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:]))
+PY
+)"
+if [ -z "$PY_LAUNCH_JSON" ]; then
+  echo "ERROR: failed to resolve Python launcher command." >&2
+  exit 1
+fi
 
 IFS=',' read -ra SPLIT_LIST <<< "$CONVERT_SPLITS"
 
@@ -156,7 +165,7 @@ with task_manifest.open("w") as out_fh:
         out_fh.write(json.dumps(rec) + "\n")
 PY
 
-bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$convert_manifest" --jobs "$CONVERT_JOBS"
+"${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$convert_manifest" --jobs "$CONVERT_JOBS"
 
 echo ""
 echo "Candidate parquet written to $PARQUET_DIR"

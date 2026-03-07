@@ -23,27 +23,36 @@ for path in "$VAL_PARQUET" "$GRAPH_VAL_MANIFEST" "$GNN_GRAPH_CKPT" "$GNN_VARONLY
 done
 
 mkdir -p "$RESULTS_DIR" "$DATA_DIR/manifests" "$DATA_DIR/pipeline_logs/export"
-PY_LAUNCH_JSON="$(bbml_python_json_array)"
+PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:]))
+PY
+)"
+if [ -z "$PY_LAUNCH_JSON" ]; then
+  echo "ERROR: failed to resolve Python launcher command." >&2
+  exit 1
+fi
 
 echo "=== Calibration and export ==="
 echo "  Export jobs : $EXPORT_JOBS"
 echo ""
 
 echo "[1/3] Fitting checkpoint-aware temperatures..."
-bbml_python -m bbml.train.calibrate \
+"${PYTHON_CMD[@]}" -m bbml.train.calibrate \
   --ckpt "$GNN_GRAPH_CKPT" \
   --parquet "$VAL_PARQUET" \
   --graph_manifest "$GRAPH_VAL_MANIFEST" \
   --device cpu \
   --out "$MODEL_DIR/bbml_gnn_graph.temperature.txt"
 
-bbml_python -m bbml.train.calibrate \
+"${PYTHON_CMD[@]}" -m bbml.train.calibrate \
   --ckpt "$GNN_VARONLY_CKPT" \
   --parquet "$VAL_PARQUET" \
   --device cpu \
   --out "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"
 
-bbml_python -m bbml.train.calibrate \
+"${PYTHON_CMD[@]}" -m bbml.train.calibrate \
   --ckpt "$MLP_CKPT" \
   --parquet "$VAL_PARQUET" \
   --device cpu \
@@ -90,7 +99,7 @@ with manifest.open("w") as fh:
 PY
 
 echo "[2/3] Exporting ONNX models..."
-bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$export_manifest" --jobs "$EXPORT_JOBS"
+"${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$export_manifest" --jobs "$EXPORT_JOBS"
 ln -sf bbml_gnn_graph_fp16.onnx "$MODEL_DIR/bbml_gnn_graph.onnx"
 
 latency_manifest="$DATA_DIR/manifests/latency_tasks.jsonl"
@@ -195,7 +204,7 @@ with manifest.open("w") as fh:
 PY
 
 echo "[3/3] Benchmarking ONNX latency..."
-bbml_python "$SCRIPT_DIR/task_runner.py" --manifest "$latency_manifest" --jobs "$EXPORT_JOBS"
+"${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$latency_manifest" --jobs "$EXPORT_JOBS"
 
 echo ""
 echo "Calibration and export complete. Outputs in $MODEL_DIR and $RESULTS_DIR"
