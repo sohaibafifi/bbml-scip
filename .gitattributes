@@ -1,0 +1,31 @@
+* text=auto
+
+# Shell and Python entrypoints must stay LF for WSL/Linux execution.
+*.sh text eol=lf
+*.bash text eol=lf
+*.py text eol=lf
+
+# Build and automation files are parsed on Unix tooling.
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+Makefile text eol=lf
+.github/workflows/*.yml text eol=lf
+.github/workflows/*.yaml text eol=lf
+
+# Source files should also remain LF across platforms.
+*.c text eol=lf
+*.cc text eol=lf
+*.cpp text eol=lf
+*.cxx text eol=lf
+*.h text eol=lf
+*.hh text eol=lf
+*.hpp text eol=lf
+
+# Data and generated artifacts.
+*.json text eol=lf
+*.jsonl text eol=lf
+*.ndjson text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
