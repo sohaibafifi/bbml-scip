@@ -1,0 +1,90 @@
+# Ablation configurations
+# Each ablation is a variant of bbml-full with one component changed.
+
+defaults:
+  base: bbml-full
+  time_limit: 3600
+  seeds: [0, 1, 2, 3, 4]
+
+ablations:
+
+  # A1: Encoder comparison
+  a1_gnn_full:
+    description: "A1 -- full bipartite GNN (baseline for A1)"
+    model: results/models/bbml_gnn.onnx
+    graph_inputs: true
+
+  a1_gnn_varonly:
+    description: "A1 -- var-only GNN (no constraint features)"
+    model: results/models/bbml_gnn_varonly.onnx
+    graph_inputs: false
+
+  a1_tabular_xgb:
+    description: "A1 -- tabular XGBoost"
+    model: results/models/bbml_xgb.onnx
+    graph_inputs: false
+
+  # A2: Blend weight
+  a2_adaptive:
+    description: "A2 -- adaptive alpha (MC-dropout confidence)"
+    alpha_max: 0.8
+    alpha_min: 0.1
+    depth_penalty: 0.02
+    confidence_gate: true
+
+  a2_fixed_05:
+    description: "A2 -- fixed alpha=0.5"
+    alpha_max: 0.5
+    alpha_min: 0.5
+    depth_penalty: 0.0
+    confidence_gate: false
+
+  a2_fixed_10:
+    description: "A2 -- fixed alpha=1.0 (pure ML)"
+    alpha_max: 1.0
+    alpha_min: 1.0
+    depth_penalty: 0.0
+    confidence_gate: false
+
+  a2_fixed_00:
+    description: "A2 -- fixed alpha=0.0 (solver only)"
+    alpha_max: 0.0
+    alpha_min: 0.0
+    depth_penalty: 0.0
+    confidence_gate: false
+
+  # A3: Temperature calibration
+  a3_with_temp:
+    description: "A3 -- with temperature calibration"
+    temperature: results/models/temperature.txt   # read T* from file
+
+  a3_no_temp:
+    description: "A3 -- no temperature calibration (T=1)"
+    temperature: 1.0
+
+  # A4: Condition-number gate
+  a4_with_cond_gate:
+    description: "A4 -- with cond_est numerical gate"
+    cond_threshold: 1.0e8
+
+  a4_no_cond_gate:
+    description: "A4 -- no cond_est gate"
+    cond_threshold: -1
+
+  # A5: FP16 vs FP32
+  a5_fp32:
+    description: "A5 -- FP32 ONNX"
+    model: results/models/bbml_gnn_fp32.onnx
+
+  a5_fp16:
+    description: "A5 -- FP16 ONNX"
+    model: results/models/bbml_gnn_fp16.onnx
+
+  # A6: Node selector
+  a6_with_nodesel:
+    description: "A6 -- with learned node selector"
+    node_selector: true
+
+  a6_no_nodesel:
+    description: "A6 -- without node selector"
+    node_selector: false

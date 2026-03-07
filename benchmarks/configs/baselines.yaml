@@ -1,0 +1,85 @@
+# Baseline configurations for the BBML benchmark
+# Each entry defines solver settings passed to run_scip_with_ml.sh / evaluate_suite.sh
+
+defaults:
+  time_limit: 3600      # seconds
+  seeds: [0, 1, 2, 3, 4]
+  node_limit: -1        # -1 = unlimited
+
+baselines:
+
+  scip-default:
+    description: "SCIP reliability branching (no ML)"
+    ml: false
+    scip_settings:
+      branching/scorefunc: "s"      # reliability branching
+      branching/scorefac: 0.167
+
+  strong-branch:
+    description: "Full strong branching (oracle)"
+    ml: false
+    scip_settings:
+      branching/fullstrong/priority: 1000000
+      branching/relpscost/priority: -1
+
+  gcnn-gasse19:
+    description: "Gasse et al. 2019 GCNN, alpha=1.0 (pure imitation)"
+    ml: true
+    model: results/models/gcnn_gasse19.onnx
+    alpha_max: 1.0
+    alpha_min: 1.0
+    depth_penalty: 0.0
+    confidence_gate: false
+    cond_threshold: -1   # disabled
+
+  pure-imitation:
+    description: "BBML GNN with alpha=1.0 fixed"
+    ml: true
+    model: results/models/bbml_gnn.onnx
+    alpha_max: 1.0
+    alpha_min: 1.0
+    depth_penalty: 0.0
+    confidence_gate: false
+    cond_threshold: -1
+
+  alpha-fixed-0.5:
+    description: "BBML GNN with alpha=0.5 fixed"
+    ml: true
+    model: results/models/bbml_gnn.onnx
+    alpha_max: 0.5
+    alpha_min: 0.5
+    depth_penalty: 0.0
+    confidence_gate: false
+    cond_threshold: -1
+
+  tabular-xgb:
+    description: "XGBoost tabular ranker (no graph), ONNX"
+    ml: true
+    model: results/models/bbml_xgb.onnx
+    alpha_max: 0.8
+    alpha_min: 0.1
+    depth_penalty: 0.02
+    confidence_gate: true
+    cond_threshold: 1.0e8
+
+  bbml-nonode:
+    description: "BBML full branchrule, node selector disabled"
+    ml: true
+    model: results/models/bbml_gnn.onnx
+    alpha_max: 0.8
+    alpha_min: 0.1
+    depth_penalty: 0.02
+    confidence_gate: true
+    cond_threshold: 1.0e8
+    node_selector: false
+
+  bbml-full:
+    description: "BBML full system (branchrule + node selector)"
+    ml: true
+    model: results/models/bbml_gnn.onnx
+    alpha_max: 0.8
+    alpha_min: 0.1
+    depth_penalty: 0.02
+    confidence_gate: true
+    cond_threshold: 1.0e8
+    node_selector: true
