@@ -139,7 +139,7 @@ with list_file.open() as src, manifest.open("a") as out:
             skip = False
             if not force:
                 skip = (
-                    and completed_log(scip_log)
+                    completed_log(scip_log)
                     and (
                         (
                             candidate_out.is_file()
