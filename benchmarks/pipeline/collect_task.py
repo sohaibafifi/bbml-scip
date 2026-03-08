@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -21,6 +22,15 @@ def _safe_unlink(path: Path) -> None:
         pass
 
 
+def _completed_log(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        return "BBML_SUMMARY" in path.read_text(errors="ignore")
+    except OSError:
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run one SCIP telemetry collection task.")
     ap.add_argument("--runner-bin", required=True)
@@ -36,6 +46,7 @@ def main() -> int:
     candidate_out = Path(args.candidate_out)
     graph_out = Path(args.graph_out)
     scip_log = Path(args.scip_log)
+    done_marker = candidate_out.with_suffix(candidate_out.suffix + ".done")
     for path in (candidate_out, graph_out, scip_log):
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -71,14 +82,29 @@ def main() -> int:
     if proc.returncode != 0:
         _safe_unlink(candidate_tmp)
         _safe_unlink(graph_tmp)
+        _safe_unlink(done_marker)
+        print(
+            f"collect_task failed exit={proc.returncode} instance={args.instance} " f"seed={args.seed} scip_log={scip_log}",
+            file=sys.stderr,
+        )
     else:
-        for path in (candidate_tmp, graph_tmp):
-            if not path.is_file() or path.stat().st_size == 0:
-                _safe_unlink(candidate_tmp)
-                _safe_unlink(graph_tmp)
+        candidate_ok = candidate_tmp.is_file() and candidate_tmp.stat().st_size > 0
+        graph_ok = graph_tmp.is_file() and graph_tmp.stat().st_size > 0
+        if candidate_ok and graph_ok:
+            candidate_tmp.replace(candidate_out)
+            graph_tmp.replace(graph_out)
+            _safe_unlink(done_marker)
+        else:
+            _safe_unlink(candidate_tmp)
+            _safe_unlink(graph_tmp)
+            if not _completed_log(scip_log):
+                _safe_unlink(done_marker)
+                print(
+                    f"collect_task failed: missing telemetry output instance={args.instance} " f"seed={args.seed} scip_log={scip_log}",
+                    file=sys.stderr,
+                )
                 return 1
-        candidate_tmp.replace(candidate_out)
-        graph_tmp.replace(graph_out)
+            done_marker.write_text("no_branch_telemetry\n")
     return int(proc.returncode)
 
 

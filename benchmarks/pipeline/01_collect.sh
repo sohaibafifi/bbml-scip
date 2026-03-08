@@ -135,14 +135,20 @@ with list_file.open() as src, manifest.open("a") as out:
             candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
             graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
             scip_log = scip_dir / f"{iid}_s{seed}.log"
+            done_marker = candidate_out.with_suffix(candidate_out.suffix + ".done")
             skip = False
             if not force:
                 skip = (
-                    candidate_out.is_file()
-                    and candidate_out.stat().st_size > 0
-                    and graph_out.is_file()
-                    and graph_out.stat().st_size > 0
                     and completed_log(scip_log)
+                    and (
+                        (
+                            candidate_out.is_file()
+                            and candidate_out.stat().st_size > 0
+                            and graph_out.is_file()
+                            and graph_out.stat().st_size > 0
+                        )
+                        or done_marker.is_file()
+                    )
                 )
             if skip:
                 skipped += 1
