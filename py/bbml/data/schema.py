@@ -18,6 +18,7 @@ BRANCH_CAND_COLS = [
     "lp_time",
     "lp_iters",
     "cut_rounds",
+    "refactor_count",
     "cond_est",
     "parent_node_id",
     "time_since_incumbent",

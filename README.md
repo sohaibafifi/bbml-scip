@@ -17,7 +17,9 @@ The supported deployable model paths in this repository are:
 - var-only GNN with `(var_feat,)` ONNX inputs
 - tabular MLP with `(X,)` ONNX inputs
 
-`bbml/numerics/cond_threshold` is exposed in the runtime interface, but the current feature extractor does not populate a non-zero condition estimate, so that guard is effectively inactive today.
+`bbml/numerics/cond_threshold` is active when a current node LP is available. The extractor reads an estimated LP basis condition number from SCIP's LPI quality interface, and, when built with `-DBBML_WITH_LP_STATS=ON` on a SoPlex-backed SCIP, it also records a basis refactor counter.
+
+`BBML_WITH_LP_STATS` is intentionally `OFF` by default. The default build still enables `cond_est` through SCIP's generic LPI APIs. Turning `BBML_WITH_LP_STATS` on only adds extra SoPlex-specific LP statistics such as `refactor_count`, so the repository stays portable across SCIP builds and LP backends by default.
 
 Important runtime distinction:
 
@@ -68,6 +70,11 @@ If you want ONNX support, run CMake from the repository root and either set
 `ONNXRUNTIME_DIR` to an unpacked ONNX Runtime release or place that release
 under `libs/onnxruntime-*`. The `examples/` folder is driven by its `Makefile`;
 it is not a standalone CMake source directory.
+
+Optional build flags:
+
+- `-DBBML_WITH_ONNX=ON` enables ONNX Runtime inference
+- `-DBBML_WITH_LP_STATS=ON` enables extra SoPlex-specific LP statistics in telemetry; it is not required for `cond_est`
 
 Makefile knobs: `MODEL=mlp|gnn`, `GRAPH=0|1`, `TIME=<seconds>`, `NODES=<max>`.
 
@@ -229,7 +236,7 @@ bash benchmarks/pipeline/run_all.sh --skip-generate --skip-collect --skip-train
 | `bbml/alpha/theta` | 0.5 | Confidence midpoint for the sigmoid α gate |
 | `bbml/confidence` | 0.5 | Fallback confidence when runtime uncertainty is unavailable |
 | `bbml/temperature` | 1.0 | Score scaling (1/T applied before blending) |
-| `bbml/numerics/cond_threshold` | 1e8 | Condition threshold for gating ML when `cond_est` is available |
+| `bbml/numerics/cond_threshold` | 1e8 | Condition threshold for gating ML when the current LP reports `cond_est` |
 | `bbml/telemetry/alpha` | false | Enable alpha/confidence CSV logging |
 | `bbml/telemetry/alpha_path` | "" | Alpha/confidence CSV output path |
 

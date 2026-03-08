@@ -19,5 +19,8 @@ target_include_directories(cpp_tests PRIVATE
 )
 
 target_link_libraries(cpp_tests PRIVATE GTest::gtest_main ${SCIP_LIBRARY})
+if(BBML_WITH_LP_STATS)
+  target_compile_definitions(cpp_tests PRIVATE BBML_WITH_LP_STATS=1)
+endif()
 
 add_test(NAME bbml_cpp_tests COMMAND cpp_tests)

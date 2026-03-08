@@ -1,10 +1,67 @@
 #include "bbml/feature_extractor.hpp"
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <string>
 #include <unordered_map>
 #include <vector>
+#include "lpi/lpi.h"
 #include "scip/lp.h"
+#include "scip/scip_lp.h"
+#include "scip/scip_solvingstats.h"
 #include "scip/scip_var.h"
+
+#ifdef BBML_WITH_LP_STATS
+#include "soplex/spxsolver.h"
+#endif
+
 namespace bbml {
+
+namespace {
+
+void populate_node_lp_stats(SCIP* scip, NodeFeature* node) {
+  if (scip == nullptr || node == nullptr) {
+    return;
+  }
+
+  const SCIP_STAGE stage = SCIPgetStage(scip);
+  if (stage == SCIP_STAGE_SOLVING) {
+    node->cut_rounds = SCIPgetNSepaRounds(scip);
+  }
+
+  if (stage != SCIP_STAGE_SOLVING || !SCIPhasCurrentNodeLP(scip) ||
+      !SCIPisLPConstructed(scip)) {
+    return;
+  }
+
+  SCIP_LPI* lpi = nullptr;
+  if (SCIPgetLPI(scip, &lpi) != SCIP_OKAY || lpi == nullptr) {
+    return;
+  }
+
+  SCIP_Real cond_est = 0.0;
+  if (SCIPlpiGetRealSolQuality(
+          lpi, SCIP_LPSOLQUALITY_ESTIMCONDITION, &cond_est) == SCIP_OKAY &&
+      std::isfinite(static_cast<double>(cond_est)) && cond_est > 0.0) {
+    node->cond_est = static_cast<double>(cond_est);
+  } else if (!SCIPlpiIsStable(lpi)) {
+    node->cond_est = std::numeric_limits<double>::infinity();
+  }
+
+#ifdef BBML_WITH_LP_STATS
+  const char* solver_name = SCIPlpiGetSolverName();
+  if (solver_name != nullptr &&
+      std::string(solver_name).find("SoPlex") != std::string::npos) {
+    void* solver_ptr = SCIPlpiGetSolverPointer(lpi);
+    if (solver_ptr != nullptr) {
+      auto* solver = static_cast<soplex::SPxSolver*>(solver_ptr);
+      node->refactor_count = std::max(0, solver->basis().lastUpdate());
+    }
+  }
+#endif
+}
+
+}  // namespace
 
 ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
                                              SCIP_NODE* node) const {
@@ -17,7 +74,8 @@ ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
   out.node.lp_iterations = static_cast<int>(SCIPgetNLPIterations(scip));
   out.node.cut_rounds = 0;
   out.node.refactor_count = 0;
-  out.node.cond_est = 0.0;  // leave unset unless a stable API is present (guarded below)
+  out.node.cond_est = 0.0;
+  populate_node_lp_stats(scip, &out.node);
   SCIP_VAR **cands = nullptr;
   SCIP_Real *candssol = nullptr;
   SCIP_Real *candsfrac = nullptr;

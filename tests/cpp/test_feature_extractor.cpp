@@ -1,7 +1,18 @@
+#include <algorithm>
 #include <gtest/gtest.h>
+#include <cmath>
+#include <limits>
+#include <string>
 #include "bbml/feature_extractor.hpp"
+#include "lpi/lpi.h"
 #include "scip/scip.h"
 #include "scip/scipdefplugins.h"
+#include "scip/scip_lp.h"
+#include "scip/scip_solvingstats.h"
+
+#ifdef BBML_WITH_LP_STATS
+#include "soplex/spxsolver.h"
+#endif
 
 TEST(FeatureExtractor, ExtractsWithoutNodeAndNoVars) {
     SCIP *scip = nullptr;
@@ -30,6 +41,9 @@ TEST(FeatureExtractor, ExtractsWithoutNodeAndNoVars) {
 namespace {
 static bbml::ExtractedFeatures g_last_feats;
 static bool g_captured = false;
+static int g_last_cut_rounds = 0;
+static int g_last_refactor_count = 0;
+static double g_last_cond_est = 0.0;
 
 static SCIP_RETCODE TestBranchExecLP(
     SCIP* scip,
@@ -39,6 +53,30 @@ static SCIP_RETCODE TestBranchExecLP(
   bbml::FeatureExtractor fx;
   SCIP_NODE* focus = SCIPgetFocusNode(scip);
   g_last_feats = fx.fromSCIP(scip, focus);
+  g_last_cut_rounds = SCIPgetNSepaRounds(scip);
+  g_last_refactor_count = 0;
+  g_last_cond_est = 0.0;
+  SCIP_LPI* lpi = nullptr;
+  if (SCIPgetLPI(scip, &lpi) == SCIP_OKAY && lpi != nullptr) {
+    SCIP_Real cond_est = 0.0;
+    if (SCIPlpiGetRealSolQuality(
+            lpi, SCIP_LPSOLQUALITY_ESTIMCONDITION, &cond_est) == SCIP_OKAY &&
+        std::isfinite(static_cast<double>(cond_est)) && cond_est > 0.0) {
+      g_last_cond_est = static_cast<double>(cond_est);
+    } else if (!SCIPlpiIsStable(lpi)) {
+      g_last_cond_est = std::numeric_limits<double>::infinity();
+    }
+#ifdef BBML_WITH_LP_STATS
+    const char* solver_name = SCIPlpiGetSolverName();
+    if (solver_name != nullptr && std::string(solver_name).find("SoPlex") != std::string::npos) {
+      void* solver_ptr = SCIPlpiGetSolverPointer(lpi);
+      if (solver_ptr != nullptr) {
+        auto* solver = static_cast<soplex::SPxSolver*>(solver_ptr);
+        g_last_refactor_count = std::max(0, solver->basis().lastUpdate());
+      }
+    }
+#endif
+  }
   g_captured = true;
   *result = SCIP_DIDNOTRUN;  // let default branching proceed
   return SCIP_OKAY;
@@ -46,6 +84,11 @@ static SCIP_RETCODE TestBranchExecLP(
 }  // namespace
 
 TEST(FeatureExtractor, FractionalRootCandidates) {
+    g_captured = false;
+    g_last_cut_rounds = 0;
+    g_last_refactor_count = 0;
+    g_last_cond_est = 0.0;
+
     SCIP *scip = nullptr;
     ASSERT_EQ(SCIPcreate(&scip), SCIP_OKAY);
     ASSERT_EQ(SCIPincludeDefaultPlugins(scip), SCIP_OKAY);
@@ -124,6 +167,13 @@ TEST(FeatureExtractor, FractionalRootCandidates) {
         EXPECT_TRUE(c.is_binary == 0 || c.is_binary == 1);
     }
     EXPECT_TRUE(saw_fractional);
+    EXPECT_EQ(g_last_feats.node.cut_rounds, g_last_cut_rounds);
+    EXPECT_EQ(g_last_feats.node.refactor_count, g_last_refactor_count);
+    if (std::isfinite(g_last_cond_est)) {
+        EXPECT_NEAR(g_last_feats.node.cond_est, g_last_cond_est, 1e-9);
+    } else {
+        EXPECT_FALSE(std::isfinite(g_last_feats.node.cond_est));
+    }
 
     ASSERT_EQ(SCIPreleaseVar(scip, &x), SCIP_OKAY);
     ASSERT_EQ(SCIPreleaseVar(scip, &y), SCIP_OKAY);
