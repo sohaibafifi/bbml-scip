@@ -9,6 +9,7 @@ namespace bbml {
 class OnnxRunner {
  public:
   explicit OnnxRunner(const std::string& model_path);
+  ~OnnxRunner();
   std::pair<std::vector<double>, double> score_candidates(
       const ExtractedFeatures& feats);
 

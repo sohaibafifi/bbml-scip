@@ -118,6 +118,9 @@ script = os.environ["SCRIPT"]
 task_log_dir = Path(os.environ["TASK_LOG_DIR"])
 manifest = Path(os.environ["MANIFEST"])
 
+graph_ensemble_paths = sorted(model_dir.glob("bbml_gnn_graph_member*.onnx"))
+graph_ensemble_model = ",".join(str(path) for path in graph_ensemble_paths) if graph_ensemble_paths else str(model_dir / "bbml_gnn_graph.onnx")
+
 method_specs = {
     "scip-default": {"disable_ml": True},
     "strong-branch": {"disable_ml": True},
@@ -130,7 +133,7 @@ method_specs = {
         "temperature_file": str(model_dir / "bbml_gnn_varonly.temperature.txt"),
     },
     "bbml-gnn-graph": {
-        "model": str(model_dir / "bbml_gnn_graph.onnx"),
+        "model": graph_ensemble_model,
         "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
     },
     "bbml-gnn-graph-fp32": {

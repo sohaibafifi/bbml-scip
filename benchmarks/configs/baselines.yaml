@@ -26,7 +26,7 @@ baselines:
     temperature: results/models/bbml_gnn_varonly.temperature.txt
 
   bbml-gnn-graph:
-    description: "Graph-input GNN ranker exported to ONNX"
+    description: "Graph-input GNN ensemble exported to ONNX and blended with runtime confidence"
     ml: true
     model: results/models/bbml_gnn_graph.onnx
     temperature: results/models/bbml_gnn_graph.temperature.txt

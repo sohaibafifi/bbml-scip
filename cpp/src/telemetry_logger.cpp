@@ -27,6 +27,9 @@ TelemetryLogger::~TelemetryLogger() {
   if (out_graph_.is_open()) {
     out_graph_.close();
   }
+  if (out_alpha_.is_open()) {
+    out_alpha_.close();
+  }
 }
 
 void TelemetryLogger::set_path(const std::string& path) {
@@ -69,6 +72,15 @@ void TelemetryLogger::set_graph_path(const std::string& path) {
   }
 }
 
+void TelemetryLogger::set_alpha_path(const std::string& path) {
+  std::lock_guard<std::mutex> lk(mtx_);
+  alpha_path_ = path;
+  if (out_alpha_.is_open()) {
+    out_alpha_.close();
+    open_alpha_ = false;
+  }
+}
+
 void TelemetryLogger::ensure_open_graph_() {
   if (open_graph_) {
     return;
@@ -86,6 +98,34 @@ void TelemetryLogger::ensure_open_graph_() {
   out_graph_.open(graph_path_, mode);
   append_ = true;
   open_graph_ = out_graph_.is_open();
+}
+
+void TelemetryLogger::ensure_open_alpha_() {
+  if (open_alpha_) {
+    return;
+  }
+  if (alpha_path_.empty()) {
+    return;
+  }
+  fs::path p(alpha_path_);
+  if (p.has_parent_path()) {
+    std::error_code ec;
+    fs::create_directories(p.parent_path(), ec);
+    (void)ec;
+  }
+  bool needs_header = true;
+  if (append_ && fs::exists(p)) {
+    std::error_code ec;
+    needs_header = fs::file_size(p, ec) == 0;
+  }
+  std::ios::openmode mode = std::ios::out | (append_ ? std::ios::app : std::ios::trunc);
+  out_alpha_.open(alpha_path_, mode);
+  append_ = true;
+  open_alpha_ = out_alpha_.is_open();
+  if (open_alpha_ && needs_header) {
+    out_alpha_ << "instance_id,node_id,depth,alpha,conf,cond_est,fallback\n";
+    out_alpha_.flush();
+  }
 }
 
 void TelemetryLogger::log_node_candidates(
@@ -266,6 +306,31 @@ void TelemetryLogger::log_root(SCIP* scip) {
   out_.flush();
 }
 
+void TelemetryLogger::log_alpha_decision(
+    SCIP_NODE* node,
+    const ExtractedFeatures& feats,
+    double alpha,
+    double confidence,
+    const std::string& fallback_reason) {
+  std::lock_guard<std::mutex> lk(mtx_);
+  ensure_open_alpha_();
+  if (!open_alpha_) {
+    return;
+  }
+  SCIP_Longint node_num = 0;
+  if (node != nullptr) {
+    node_num = SCIPnodeGetNumber(node);
+  }
+  out_alpha_ << instance_id_ << ','
+             << node_num << ','
+             << feats.node.depth << ','
+             << std::setprecision(17) << alpha << ','
+             << std::setprecision(17) << confidence << ','
+             << std::setprecision(17) << feats.node.cond_est << ','
+             << fallback_reason << '\n';
+  out_alpha_.flush();
+}
+
 TelemetryLogger& getTelemetryLogger() {
   if (!g_logger) {
     g_logger = new TelemetryLogger();
@@ -283,6 +348,10 @@ void setTelemetryInstanceId(const std::string& id) {
 
 void setTelemetryGraphPath(const std::string& path) {
   getTelemetryLogger().set_graph_path(path);
+}
+
+void setTelemetryAlphaPath(const std::string& path) {
+  getTelemetryLogger().set_alpha_path(path);
 }
 
 }  // namespace bbml

@@ -8,7 +8,7 @@ At every branching node in the B&B tree, instead of choosing which variable to b
 
 1. Extracts node and candidate features from SCIP's LP state.
 2. Queries an exported ONNX model for a ranking score.
-3. Blends the ML score with a reduced-cost fallback using a depth-adjusted blend weight and a fixed confidence scalar.
+3. Blends the ML score with a pseudocost fallback using a depth-adjusted blend weight and a confidence gate.
 4. Returns the candidate with the highest blended score.
 
 The supported deployable model paths in this repository are:
@@ -221,14 +221,17 @@ bash benchmarks/pipeline/run_all.sh --skip-generate --skip-collect --skip-train
 | `bbml/telemetry/graph` | false | Log graph snapshots (var/con/edge) |
 | `bbml/telemetry/graph_path` | "" | Graph NDJSON output path |
 | `bbml/telemetry/append` | true | Append instead of truncating on first open |
-| `bbml/model_path` | "" | Path to ONNX model |
+| `bbml/model_path` | "" | Path to ONNX model, or a comma-separated ensemble of ONNX models |
 | `bbml/reload` | 0 | Increment to hot-reload model at runtime |
 | `bbml/alpha/max` | 0.8 | Maximum ML blend weight |
 | `bbml/alpha/min` | 0.1 | Minimum ML blend weight |
 | `bbml/alpha/depth_penalty` | 0.02 | α decay per tree level |
-| `bbml/confidence` | 0.5 | Fixed confidence scalar used in α blending |
+| `bbml/alpha/theta` | 0.5 | Confidence midpoint for the sigmoid α gate |
+| `bbml/confidence` | 0.5 | Fallback confidence when runtime uncertainty is unavailable |
 | `bbml/temperature` | 1.0 | Score scaling (1/T applied before blending) |
 | `bbml/numerics/cond_threshold` | 1e8 | Condition threshold for gating ML when `cond_est` is available |
+| `bbml/telemetry/alpha` | false | Enable alpha/confidence CSV logging |
+| `bbml/telemetry/alpha_path` | "" | Alpha/confidence CSV output path |
 
 Use these parameters either in a `.set` file:
 

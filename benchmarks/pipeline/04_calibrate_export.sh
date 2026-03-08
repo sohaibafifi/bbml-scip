@@ -17,6 +17,10 @@ GRAPH_VAL_MANIFEST="$DATA_DIR/manifests/graph/val.txt"
 GNN_GRAPH_CKPT="$MODEL_DIR/bbml_gnn_graph_best.pt"
 GNN_VARONLY_CKPT="$MODEL_DIR/bbml_gnn_varonly_best.pt"
 MLP_CKPT="$MODEL_DIR/bbml_mlp_best.pt"
+shopt -s nullglob
+GRAPH_ENSEMBLE_CKPTS=("$GNN_GRAPH_CKPT" "$MODEL_DIR"/bbml_gnn_graph_member*_best.pt)
+shopt -u nullglob
+GRAPH_ENSEMBLE_SPEC="$(IFS=,; printf '%s' "${GRAPH_ENSEMBLE_CKPTS[*]}")"
 
 for path in "$VAL_PARQUET" "$GRAPH_VAL_MANIFEST" "$GNN_GRAPH_CKPT" "$GNN_VARONLY_CKPT" "$MLP_CKPT"; do
   [ ! -f "$path" ] && echo "ERROR: missing required artifact: $path" && exit 1
@@ -40,7 +44,7 @@ echo ""
 
 echo "[1/3] Fitting checkpoint-aware temperatures..."
 "${PYTHON_CMD[@]}" -m bbml.train.calibrate \
-  --ckpt "$GNN_GRAPH_CKPT" \
+  --ckpt "$GRAPH_ENSEMBLE_SPEC" \
   --parquet "$VAL_PARQUET" \
   --graph_manifest "$GRAPH_VAL_MANIFEST" \
   --device cpu \
@@ -62,7 +66,7 @@ export_manifest="$DATA_DIR/manifests/export_tasks.jsonl"
 PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
 MODEL_DIR="$MODEL_DIR" \
 DATA_DIR="$DATA_DIR" \
-python3 - <<'PY'
+"${PYTHON_CMD[@]}" - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -80,6 +84,25 @@ tasks = [
     ("bbml_gnn_varonly", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_gnn_varonly_best.pt"), "--out", str(model_dir / "bbml_gnn_varonly.onnx")]),
     ("bbml_mlp", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_mlp_best.pt"), "--out", str(model_dir / "bbml_mlp.onnx")]),
 ]
+
+member_ckpts = [model_dir / "bbml_gnn_graph_best.pt"]
+member_ckpts.extend(sorted(model_dir.glob("bbml_gnn_graph_member*_best.pt")))
+for idx, ckpt in enumerate(member_ckpts[1:], start=1):
+    tasks.append(
+        (
+            f"bbml_gnn_graph_member{idx}",
+            [
+                *py_launch,
+                "-m",
+                "bbml.export.export_onnx",
+                "--ckpt",
+                str(ckpt),
+                "--fp16",
+                "--out",
+                str(model_dir / f"bbml_gnn_graph_member{idx}.onnx"),
+            ],
+        )
+    )
 
 with manifest.open("w") as fh:
     for name, cmd in tasks:
@@ -101,6 +124,7 @@ PY
 echo "[2/3] Exporting ONNX models..."
 "${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$export_manifest" --jobs "$EXPORT_JOBS"
 ln -sf bbml_gnn_graph_fp16.onnx "$MODEL_DIR/bbml_gnn_graph.onnx"
+ln -sf bbml_gnn_graph_fp16.onnx "$MODEL_DIR/bbml_gnn_graph_member0.onnx"
 
 latency_manifest="$DATA_DIR/manifests/latency_tasks.jsonl"
 PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \

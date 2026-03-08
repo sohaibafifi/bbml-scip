@@ -25,6 +25,12 @@ LR="${TRAIN_LR:-3e-4}"
 HIDDEN="${TRAIN_HIDDEN:-64}"
 DROPOUT="${TRAIN_DROPOUT:-0.1}"
 SEED="${TRAIN_SEED:-0}"
+ENSEMBLE_SIZE="${TRAIN_ENSEMBLE_SIZE:-3}"
+
+if [ "$ENSEMBLE_SIZE" -lt 1 ]; then
+  echo "ERROR: TRAIN_ENSEMBLE_SIZE must be >= 1"
+  exit 1
+fi
 
 echo "=== Model training ==="
 echo "  Epochs    : $EPOCHS"
@@ -32,20 +38,29 @@ echo "  Batch size: $BATCH_SIZE"
 echo "  LR        : $LR"
 echo "  Hidden    : $HIDDEN"
 echo "  Dropout   : $DROPOUT"
+echo "  Ensemble  : $ENSEMBLE_SIZE graph checkpoints"
 echo ""
 
-echo "[1/3] Training graph GNN from aggregate graph manifests..."
-"${PYTHON_CMD[@]}" -m bbml.train.train_rank \
-  --model gnn \
-  --graph_manifest "$GRAPH_TRAIN_MANIFEST" \
-  --epochs "$EPOCHS" \
-  --batch_size "$BATCH_SIZE" \
-  --lr "$LR" \
-  --hidden "$HIDDEN" \
-  --dropout "$DROPOUT" \
-  --seed "$SEED" \
-  --metric loss \
-  --ckpt_best "$MODEL_DIR/bbml_gnn_graph_best.pt"
+echo "[1/3] Training graph GNN ensemble from aggregate graph manifests..."
+for member_idx in $(seq 0 $((ENSEMBLE_SIZE - 1))); do
+  member_seed=$((SEED + member_idx))
+  member_ckpt="$MODEL_DIR/bbml_gnn_graph_member${member_idx}_best.pt"
+  if [ "$member_idx" -eq 0 ]; then
+    member_ckpt="$MODEL_DIR/bbml_gnn_graph_best.pt"
+  fi
+  echo "  - graph member $member_idx (seed=$member_seed) -> $member_ckpt"
+  "${PYTHON_CMD[@]}" -m bbml.train.train_rank \
+    --model gnn \
+    --graph_manifest "$GRAPH_TRAIN_MANIFEST" \
+    --epochs "$EPOCHS" \
+    --batch_size "$BATCH_SIZE" \
+    --lr "$LR" \
+    --hidden "$HIDDEN" \
+    --dropout "$DROPOUT" \
+    --seed "$member_seed" \
+    --metric loss \
+    --ckpt_best "$member_ckpt"
+done
 
 echo "[2/3] Training var-only GNN from aggregate parquet..."
 "${PYTHON_CMD[@]}" -m bbml.train.train_rank \

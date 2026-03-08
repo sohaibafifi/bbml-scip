@@ -15,6 +15,8 @@ class BranchruleML {
              const std::vector<double>& fallback_scores,
              std::vector<double>* blended_scores,
              double* alpha_used,
+             double* confidence_used,
+             bool* used_runtime_confidence,
              double confidence,
              int depth) const;
 
@@ -22,6 +24,7 @@ class BranchruleML {
   void set_alpha_params(double amin, double amax, double depth_penalty) {
     amin_ = amin; amax_ = amax; depth_penalty_ = depth_penalty;
   }
+  void set_alpha_theta(double theta) { theta_ = theta; }
   void set_temperature(double T) { temperature_ = (T <= 0.0 ? 1.0 : T); }
 
  private:
@@ -29,6 +32,7 @@ class BranchruleML {
   double amin_ = 0.1;
   double amax_ = 0.8;
   double depth_penalty_ = 0.02;
+  double theta_ = 0.5;
   double temperature_ = 1.0;
 };
 

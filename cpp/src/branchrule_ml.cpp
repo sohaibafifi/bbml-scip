@@ -12,6 +12,19 @@
 
 namespace bbml {
 
+namespace {
+
+double sigmoid(double x) {
+  if (x >= 0.0) {
+    const double z = std::exp(-x);
+    return 1.0 / (1.0 + z);
+  }
+  const double z = std::exp(x);
+  return z / (1.0 + z);
+}
+
+}  // namespace
+
 BranchruleML::BranchruleML(std::unique_ptr<OnnxRunner> runner)
     : runner_(std::move(runner)) {}
 
@@ -19,15 +32,28 @@ int BranchruleML::choose(const ExtractedFeatures& feats,
                          const std::vector<double>& fallback_scores,
                          std::vector<double>* blended,
                          double* alpha_used,
+                         double* confidence_used,
+                         bool* used_runtime_confidence,
                          double confidence,
                          int depth) const {
-  double alpha = std::max(0.0, std::min(
-      amax_, amin_ + confidence * (amax_ - amin_) - depth_penalty_ * depth));
+  auto sc = runner_->score_candidates(feats);
+  const auto& ml = sc.first;
+  const bool has_runtime_confidence = std::isfinite(sc.second);
+  const double effective_confidence = std::clamp(
+      has_runtime_confidence ? sc.second : confidence, 0.0, 1.0);
+  const double alpha_depth = std::clamp(
+      amax_ - depth_penalty_ * depth, amin_, amax_);
+  const double confidence_gate = sigmoid(12.0 * (effective_confidence - theta_));
+  const double alpha = amin_ + (alpha_depth - amin_) * confidence_gate;
   if (alpha_used) {
     *alpha_used = alpha;
   }
-  auto sc = runner_->score_candidates(feats);
-  const auto& ml = sc.first;
+  if (confidence_used) {
+    *confidence_used = effective_confidence;
+  }
+  if (used_runtime_confidence) {
+    *used_runtime_confidence = has_runtime_confidence;
+  }
   blended->resize(feats.candidates.size());
   for (size_t i = 0; i < blended->size(); ++i) {
     const double fallback = i < fallback_scores.size() ? fallback_scores[i] : 0.0;
@@ -82,7 +108,9 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   SCIP_Bool tlogsb = FALSE;
   SCIP_Bool tappend = TRUE;
   SCIP_Bool tgraph = FALSE;
+  SCIP_Bool talpha = FALSE;
   SCIP_Real a_min = 0.1, a_max = 0.8, depth_pen = 0.02;
+  SCIP_Real a_theta = 0.5;
   SCIP_Real confidence = 0.5;  // base confidence
   SCIP_Real temperature = 1.0;
   SCIP_Real cond_thresh = 1e8;
@@ -90,13 +118,16 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   int reload_counter = 0;
   char* tpath_c = nullptr;
   char* tgraph_path_c = nullptr;
+  char* talpha_path_c = nullptr;
   (void)SCIPgetBoolParam(scip, "bbml/enable", &enable);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry", &telemetry);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/strongbranch", &tlogsb);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/graph", &tgraph);
+  (void)SCIPgetBoolParam(scip, "bbml/telemetry/alpha", &talpha);
   (void)SCIPgetRealParam(scip, "bbml/alpha/min", &a_min);
   (void)SCIPgetRealParam(scip, "bbml/alpha/max", &a_max);
   (void)SCIPgetRealParam(scip, "bbml/alpha/depth_penalty", &depth_pen);
+  (void)SCIPgetRealParam(scip, "bbml/alpha/theta", &a_theta);
   (void)SCIPgetRealParam(scip, "bbml/confidence", &confidence);
   (void)SCIPgetRealParam(scip, "bbml/temperature", &temperature);
   (void)SCIPgetRealParam(scip, "bbml/numerics/cond_threshold", &cond_thresh);
@@ -104,6 +135,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   (void)SCIPgetIntParam(scip, "bbml/reload", &reload_counter);
   (void)SCIPgetStringParam(scip, "bbml/telemetry/path", &tpath_c);
   (void)SCIPgetStringParam(scip, "bbml/telemetry/graph_path", &tgraph_path_c);
+  (void)SCIPgetStringParam(scip, "bbml/telemetry/alpha_path", &talpha_path_c);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/append", &tappend);
 
   if (!enable) {
@@ -131,9 +163,13 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   if (tgraph_path_c != nullptr && tgraph_path_c[0] != '\0') {
     setTelemetryGraphPath(std::string(tgraph_path_c));
   }
+  if (talpha_path_c != nullptr && talpha_path_c[0] != '\0') {
+    setTelemetryAlphaPath(std::string(talpha_path_c));
+  }
 
   // update blending params
   data->br->set_alpha_params(a_min, a_max, depth_pen);
+  data->br->set_alpha_theta(static_cast<double>(a_theta));
   data->br->set_temperature(static_cast<double>(temperature));
   // gate confidence by numerics (e.g., ill-conditioned LP)
   SCIP_Real eff_conf = (feats.node.cond_est > cond_thresh) ? 0.0 : confidence;
@@ -156,7 +192,17 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     }
     fallback_scores[static_cast<size_t>(i)] = score;
   }
-  int idx = data->br->choose(feats, fallback_scores, &blended, &alpha, eff_conf, feats.node.depth);
+  double used_confidence = 0.0;
+  bool used_runtime_confidence = false;
+  int idx = data->br->choose(
+      feats,
+      fallback_scores,
+      &blended,
+      &alpha,
+      &used_confidence,
+      &used_runtime_confidence,
+      eff_conf,
+      feats.node.depth);
   if (idx < 0 || idx >= nc) {
     *result = SCIP_DIDNOTRUN;
     return SCIP_OKAY;
@@ -204,6 +250,18 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     if (tgraph) {
       getTelemetryLogger().log_graph_snapshot(scip, focus, feats, idx, sup, sdown);
     }
+  }
+  if (telemetry && talpha) {
+    const std::string fallback_reason =
+        (feats.node.cond_est > cond_thresh)
+            ? "numerics"
+            : (used_runtime_confidence ? "ensemble" : "static");
+    getTelemetryLogger().log_alpha_decision(
+        focus,
+        feats,
+        alpha,
+        used_confidence,
+        fallback_reason);
   }
   if (!isCandidateBranchable(scip, candvars[static_cast<size_t>(idx)])) {
     int fallback_idx = -1;
@@ -271,8 +329,11 @@ SCIP_RETCODE includeBranchruleML(SCIP* scip) {
   SCIP_CALL(SCIPaddRealParam(scip, "bbml/alpha/depth_penalty",
       "alpha depth penalty per level", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
       /*default*/ 0.02, /*min*/ 0.0, /*max*/ 1.0, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
+  SCIP_CALL(SCIPaddRealParam(scip, "bbml/alpha/theta",
+      "confidence midpoint for alpha gating", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
+      /*default*/ 0.5, /*min*/ 0.0, /*max*/ 1.0, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddRealParam(scip, "bbml/confidence",
-      "base confidence in ML scores [0,1]", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
+      "fallback confidence used when runtime uncertainty is unavailable", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
       /*default*/ 0.5, /*min*/ 0.0, /*max*/ 1.0, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddRealParam(scip, "bbml/temperature",
       "temperature to scale ML scores (>0)", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
@@ -286,6 +347,12 @@ SCIP_RETCODE includeBranchruleML(SCIP* scip) {
       /*default*/ "", /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddStringParam(scip, "bbml/telemetry/graph_path",
       "graph telemetry output path (NDJSON)", /*valueptr*/ nullptr, /*isadvanced*/ TRUE,
+      /*default*/ "", /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
+  SCIP_CALL(SCIPaddBoolParam(scip, "bbml/telemetry/alpha",
+      "log alpha/confidence decisions (CSV)", /*valueptr*/ nullptr, /*isadvanced*/ TRUE,
+      /*default*/ FALSE, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
+  SCIP_CALL(SCIPaddStringParam(scip, "bbml/telemetry/alpha_path",
+      "alpha telemetry output path (CSV)", /*valueptr*/ nullptr, /*isadvanced*/ TRUE,
       /*default*/ "", /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddBoolParam(scip, "bbml/telemetry/append",
       "append to telemetry file instead of truncating on first open", /*valueptr*/ nullptr,

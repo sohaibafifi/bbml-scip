@@ -1,7 +1,7 @@
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -52,16 +52,46 @@ def _build_model(cfg: dict) -> nn.Module:
     raise ValueError(f"Unsupported checkpoint model type: {model_type!r}")
 
 
-def _load_model(ckpt_path: str, device: str) -> Tuple[nn.Module, dict]:
-    obj = torch.load(ckpt_path, map_location=device)
-    if not isinstance(obj, dict) or "state_dict" not in obj or "cfg" not in obj:
-        raise ValueError(f"Checkpoint {ckpt_path} does not contain cfg/state_dict metadata")
-    cfg = dict(obj["cfg"])
-    model = _build_model(cfg)
-    model.load_state_dict(obj["state_dict"])
-    model.to(device)
-    model.eval()
-    return model, cfg
+def _parse_ckpt_paths(ckpt_spec: str) -> List[str]:
+    return [part.strip() for part in ckpt_spec.split(",") if part.strip()]
+
+
+def _cfg_signature(cfg: dict) -> Tuple:
+    return (
+        cfg.get("model"),
+        int(cfg.get("d_in", -1)),
+        int(cfg.get("d_var", -1)),
+        int(cfg.get("d_con", -1)),
+        int(cfg.get("hidden", 64)),
+        int(cfg.get("layers", 1)),
+        float(cfg.get("dropout", 0.0)),
+        bool(cfg.get("graph_inputs", False)),
+    )
+
+
+def _load_models(ckpt_spec: str, device: str) -> Tuple[List[nn.Module], dict]:
+    models: List[nn.Module] = []
+    cfg_ref = None
+    sig_ref = None
+    for ckpt_path in _parse_ckpt_paths(ckpt_spec):
+        obj = torch.load(ckpt_path, map_location=device)
+        if not isinstance(obj, dict) or "state_dict" not in obj or "cfg" not in obj:
+            raise ValueError(f"Checkpoint {ckpt_path} does not contain cfg/state_dict metadata")
+        cfg = dict(obj["cfg"])
+        sig = _cfg_signature(cfg)
+        if cfg_ref is None:
+            cfg_ref = cfg
+            sig_ref = sig
+        elif sig != sig_ref:
+            raise ValueError("All ensemble checkpoints must share the same model configuration")
+        model = _build_model(cfg)
+        model.load_state_dict(obj["state_dict"])
+        model.to(device)
+        model.eval()
+        models.append(model)
+    if not models or cfg_ref is None:
+        raise ValueError(f"No checkpoints resolved from: {ckpt_spec}")
+    return models, cfg_ref
 
 
 def _build_loader(cfg: dict, args: argparse.Namespace) -> DataLoader:
@@ -75,18 +105,26 @@ def _build_loader(cfg: dict, args: argparse.Namespace) -> DataLoader:
     return DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_groups)
 
 
-def _score_group(model: nn.Module, group, cfg: dict, device: str) -> torch.Tensor:
-    if cfg["model"] == "mlp":
-        return model(group.X.to(device))
-    if cfg.get("graph_inputs", False):
-        con_feat = group.con_feat.to(device) if group.con_feat is not None else None
-        edge_index = group.edge_index.to(device) if group.edge_index is not None else None
-        return model(group.var_feat.to(device), con_feat, edge_index)
-    return model(group.X.to(device), None, None)
+def _score_group(models: List[nn.Module], group, cfg: dict, device: str) -> torch.Tensor:
+    scores = []
+    for model in models:
+        if cfg["model"] == "mlp":
+            scores.append(model(group.X.to(device)))
+            continue
+        if cfg.get("graph_inputs", False):
+            con_feat = group.con_feat.to(device) if group.con_feat is not None else None
+            edge_index = group.edge_index.to(device) if group.edge_index is not None else None
+            scores.append(model(group.var_feat.to(device), con_feat, edge_index))
+            continue
+        scores.append(model(group.X.to(device), None, None))
+    if len(scores) == 1:
+        return scores[0]
+    return torch.stack(scores, dim=0).mean(dim=0)
 
 
-def fit_temperature_listwise(model: nn.Module, loader: DataLoader, cfg: dict, device: str = "cpu") -> TempScaleResult:
-    model.eval()
+def fit_temperature_listwise(models: List[nn.Module], loader: DataLoader, cfg: dict, device: str = "cpu") -> TempScaleResult:
+    for model in models:
+        model.eval()
     temperature_param = nn.Parameter(torch.tensor([0.0], device=device))
     optimizer = torch.optim.LBFGS([temperature_param], lr=0.1, max_iter=50)
 
@@ -97,7 +135,7 @@ def fit_temperature_listwise(model: nn.Module, loader: DataLoader, cfg: dict, de
             for group in batch:
                 if group.y_true is None:
                     continue
-                scores = _score_group(model, group, cfg, device)
+                scores = _score_group(models, group, cfg, device)
                 total_loss = total_loss + listnet_nll(scores, group.y_true.to(device), temperature_param.exp())
         total_loss.backward()
         return total_loss
@@ -130,17 +168,21 @@ def main():
     ap.add_argument("--out", type=str, default=None, help="Optional file to write the fitted temperature into")
     args = ap.parse_args()
 
-    if not Path(args.ckpt).exists():
+    ckpt_paths = _parse_ckpt_paths(args.ckpt)
+    if not ckpt_paths:
         raise FileNotFoundError(args.ckpt)
+    for ckpt in ckpt_paths:
+        if not Path(ckpt).exists():
+            raise FileNotFoundError(ckpt)
     if not Path(args.parquet).exists():
         raise FileNotFoundError(args.parquet)
 
-    model, cfg = _load_model(args.ckpt, args.device)
+    models, cfg = _load_models(args.ckpt, args.device)
     if cfg.get("graph_inputs", False) and not (args.graph_ndjson or args.graph_manifest):
         raise ValueError("graph-input checkpoints require --graph_ndjson or --graph_manifest for calibration")
 
     loader = _build_loader(cfg, args)
-    res = fit_temperature_listwise(model, loader, cfg, device=args.device)
+    res = fit_temperature_listwise(models, loader, cfg, device=args.device)
     if args.out:
         Path(args.out).write_text(f"{res.temperature:.6f}\n")
     print(f"Fitted temperature: T={res.temperature:.6f} (groups={res.n_groups}, items={res.n_items})")
