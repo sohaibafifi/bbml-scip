@@ -24,7 +24,8 @@ class BaselineConfig:
 def prepare_pairs(df: pd.DataFrame, features: List[str]) -> Tuple[np.ndarray, np.ndarray]:
     """Prepare (X, y) where y is a per-candidate target score.
 
-    If sb_score/sb_score_up/down exist, uses them. Otherwise, uses a proxy: |reduced_cost|.
+    If sb_score/sb_score_up/down exist, uses them. Otherwise, prefers a pseudocost
+    proxy when present, and falls back to |reduced_cost|.
     """
     X = df[features].astype(float).values
     if "sb_score" in df.columns:
@@ -36,6 +37,11 @@ def prepare_pairs(df: pd.DataFrame, features: List[str]) -> Tuple[np.ndarray, np
             y = np.maximum(up, down)
         else:
             y = up
+    elif {"pseudocost_up", "pseudocost_down"}.issubset(df.columns):
+        y = np.maximum(
+            df["pseudocost_up"].astype(float).values,
+            df["pseudocost_down"].astype(float).values,
+        )
     else:
         y = df["reduced_cost"].abs().astype(float).values
     return X, y

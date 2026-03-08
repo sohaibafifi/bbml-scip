@@ -6,7 +6,7 @@ import pandas as pd
 import torch
 
 from bbml.models.graph_ranker import GraphRanker
-from bbml.train.train_rank import ScoreMLP
+from bbml.train.train_rank import DEFAULT_FEATS, GRAPH_VAR_FEATS, ScoreMLP
 
 
 def _run_module(*args):
@@ -29,17 +29,21 @@ def test_calibrate_uses_checkpoint_metadata(tmp_path):
                     "domain_width": 1.0,
                     "is_binary": 1,
                     "is_integer": 1,
+                    "pseudocost_up": float(vid + 1),
+                    "pseudocost_down": float(vid + 2),
+                    "pc_obs_up": float(vid + 3),
+                    "pc_obs_down": float(vid + 4),
                     "sb_score": float(vid + 1),
                 }
             )
     pd.DataFrame(rows).to_parquet(parquet, index=False)
 
-    model = ScoreMLP(d_in=6, hidden=8, dropout=0.1)
+    model = ScoreMLP(d_in=len(DEFAULT_FEATS), hidden=8, dropout=0.1)
     ckpt = tmp_path / "mlp.pt"
     torch.save(
         {
             "model": "mlp",
-            "cfg": {"model": "mlp", "d_in": 6, "hidden": 8, "dropout": 0.1},
+            "cfg": {"model": "mlp", "d_in": len(DEFAULT_FEATS), "hidden": 8, "dropout": 0.1},
             "state_dict": model.state_dict(),
         },
         ckpt,
@@ -53,13 +57,13 @@ def test_calibrate_uses_checkpoint_metadata(tmp_path):
 
 def test_export_onnx_uses_checkpoint_graph_signature(tmp_path):
     ckpt = tmp_path / "graph.pt"
-    model = GraphRanker(d_var=9, d_con=4, hidden=8, layers=1, dropout=0.0)
+    model = GraphRanker(d_var=len(GRAPH_VAR_FEATS), d_con=4, hidden=8, layers=1, dropout=0.0)
     torch.save(
         {
             "model": "gnn",
             "cfg": {
                 "model": "gnn",
-                "d_var": 9,
+                "d_var": len(GRAPH_VAR_FEATS),
                 "d_con": 4,
                 "hidden": 8,
                 "layers": 1,

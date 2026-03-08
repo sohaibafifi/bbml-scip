@@ -8,6 +8,7 @@
 #include <vector>
 #include "bbml/telemetry_logger.hpp"
 #include "scip/scip.h"
+#include "scip/scip_var.h"
 
 namespace bbml {
 
@@ -15,6 +16,7 @@ BranchruleML::BranchruleML(std::unique_ptr<OnnxRunner> runner)
     : runner_(std::move(runner)) {}
 
 int BranchruleML::choose(const ExtractedFeatures& feats,
+                         const std::vector<double>& fallback_scores,
                          std::vector<double>* blended,
                          double* alpha_used,
                          double confidence,
@@ -24,17 +26,13 @@ int BranchruleML::choose(const ExtractedFeatures& feats,
   if (alpha_used) {
     *alpha_used = alpha;
   }
-  std::vector<double> def;
-  def.reserve(feats.candidates.size());
-  for (const auto& c : feats.candidates) {
-    def.push_back(std::fabs(c.reduced_cost));
-  }
   auto sc = runner_->score_candidates(feats);
   const auto& ml = sc.first;
   blended->resize(feats.candidates.size());
   for (size_t i = 0; i < blended->size(); ++i) {
+    const double fallback = i < fallback_scores.size() ? fallback_scores[i] : 0.0;
     double mli = (i < ml.size() ? alpha * (ml[i] / std::max(1e-6, temperature_)) : 0.0);
-    (*blended)[i] = mli + (1.0 - alpha) * def[i];
+    (*blended)[i] = mli + (1.0 - alpha) * fallback;
   }
   auto it = std::max_element(blended->begin(), blended->end());
   return static_cast<int>(std::distance(blended->begin(), it));
@@ -139,19 +137,29 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   data->br->set_temperature(static_cast<double>(temperature));
   // gate confidence by numerics (e.g., ill-conditioned LP)
   SCIP_Real eff_conf = (feats.node.cond_est > cond_thresh) ? 0.0 : confidence;
-  int idx = data->br->choose(feats, &blended, &alpha, eff_conf, feats.node.depth);
   SCIP_VAR** cands = nullptr;
   SCIP_Real* candssol = nullptr;
   SCIP_Real* candsfrac = nullptr;
   int nc = 0, np = 0, ni = 0;
   SCIPgetLPBranchCands(scip, &cands, &candssol, &candsfrac, &nc, &np, &ni);
-  if (idx < 0 || idx >= nc) {
+  if (nc <= 0) {
     *result = SCIP_DIDNOTRUN;
     return SCIP_OKAY;
   }
+  std::vector<double> fallback_scores(static_cast<size_t>(nc), 0.0);
   std::vector<SCIP_VAR*> candvars(static_cast<size_t>(nc), nullptr);
   for (int i = 0; i < nc; ++i) {
     candvars[static_cast<size_t>(i)] = cands[i];
+    double score = SCIPgetVarPseudocostScore(scip, cands[i], candssol[i]);
+    if ((!std::isfinite(score) || score < 0.0) && static_cast<size_t>(i) < feats.candidates.size()) {
+      score = std::fabs(feats.candidates[static_cast<size_t>(i)].reduced_cost);
+    }
+    fallback_scores[static_cast<size_t>(i)] = score;
+  }
+  int idx = data->br->choose(feats, fallback_scores, &blended, &alpha, eff_conf, feats.node.depth);
+  if (idx < 0 || idx >= nc) {
+    *result = SCIP_DIDNOTRUN;
+    return SCIP_OKAY;
   }
   // optional strong-branch scores for telemetry
   std::vector<double> sb_up, sb_down;

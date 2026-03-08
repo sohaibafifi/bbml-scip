@@ -4,7 +4,7 @@ from typing import Optional, Tuple, Any, Dict
 
 import torch
 from torch.onnx import utils as onnx_utils
-from bbml.train.train_rank import ScoreMLP
+from bbml.train.train_rank import DEFAULT_FEATS, GRAPH_VAR_FEATS, ScoreMLP
 from bbml.models.graph_ranker import GraphRanker
 
 try:
@@ -40,14 +40,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="Output ONNX file path")
     ap.add_argument("--model", type=str, default="mlp", choices=["mlp", "gnn"], help="Model type to export")
-    ap.add_argument("--d_in", type=int, default=6, help="Input dim for MLP")
+    ap.add_argument("--d_in", type=int, default=len(DEFAULT_FEATS), help="Input dim for MLP")
     ap.add_argument("--hidden", type=int, default=64)
     ap.add_argument("--dropout", type=float, default=0.0)
     ap.add_argument("--fp16", action="store_true", help="Export weights as FP16")
     ap.add_argument("--ckpt", help="Load model weights from checkpoint", type=str, default="score_mlp.pt")
     # GNN-specific
-    ap.add_argument("--d_var", type=int, default=6, help="Variable feature dim for GNN")
-    ap.add_argument("--d_con", type=int, default=6, help="Constraint feature dim for GNN")
+    ap.add_argument("--d_var", type=int, default=len(GRAPH_VAR_FEATS), help="Variable feature dim for GNN")
+    ap.add_argument("--d_con", type=int, default=4, help="Constraint feature dim for GNN")
     ap.add_argument("--layers", type=int, default=3, help="Number of GNN layers")
     ap.add_argument("--graph_inputs", action="store_true", help="Export GNN with graph inputs (var, con, edge_index) instead of var-only input")
     ap.add_argument(

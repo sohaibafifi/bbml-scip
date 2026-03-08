@@ -4,6 +4,7 @@ from typing import List
 
 import numpy as np
 import onnxruntime as ort
+from bbml.train.train_rank import DEFAULT_FEATS
 
 
 def _build_inputs(session: ort.InferenceSession, n_var: int, d_var: int, d_con: int, edge_factor: int) -> dict[str, np.ndarray]:
@@ -38,7 +39,7 @@ def bench(onnx_path: str, dims: List[int], d_var: int, d_con: int, runs: int = 5
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--onnx", required=True, help="Path to ONNX model")
-    ap.add_argument("--d", type=int, default=6, help="Input feature dimension for single-input models")
+    ap.add_argument("--d", type=int, default=len(DEFAULT_FEATS), help="Input feature dimension for single-input models")
     ap.add_argument("--d_var", type=int, default=None, help="Variable feature dimension for graph models")
     ap.add_argument("--d_con", type=int, default=None, help="Constraint feature dimension for graph models")
     ap.add_argument("--edge-factor", type=int, default=2, help="Number of graph edges per variable for graph latency smoke tests")

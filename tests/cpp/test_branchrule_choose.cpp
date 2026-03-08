@@ -32,15 +32,16 @@ static bbml::ExtractedFeatures make_feats(
   return f;
 }
 
-TEST(BranchruleChoose, PicksLargestAbsReducedCostWhenNoML) {
+TEST(BranchruleChoose, PicksLargestFallbackScoreWhenNoML) {
   auto runner = std::make_unique<bbml::OnnxRunner>(std::string(""));
   bbml::BranchruleML br(std::move(runner));
   auto feats = make_feats({-0.1, 0.5, -1.2, 0.9});
+  std::vector<double> fallback_scores{0.1, 0.5, 1.2, 0.9};
   std::vector<double> blended;
   double alpha = 0.0;
-  int idx = br.choose(feats, &blended, &alpha, /*confidence=*/0.0,
+  int idx = br.choose(feats, fallback_scores, &blended, &alpha, /*confidence=*/0.0,
                       /*depth=*/0);
-  EXPECT_EQ(idx, 2);  // |-1.2| is largest
+  EXPECT_EQ(idx, 2);
   ASSERT_EQ(blended.size(), feats.candidates.size());
   // with confidence 0, alpha should be near lower bound (amin=0.1)
   EXPECT_GE(alpha, 0.0);

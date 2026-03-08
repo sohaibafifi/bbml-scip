@@ -12,6 +12,7 @@ class BranchruleML {
  public:
   explicit BranchruleML(std::unique_ptr<OnnxRunner> runner);
   int choose(const ExtractedFeatures& feats,
+             const std::vector<double>& fallback_scores,
              std::vector<double>* blended_scores,
              double* alpha_used,
              double confidence,

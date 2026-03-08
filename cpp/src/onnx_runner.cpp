@@ -1,4 +1,5 @@
 #include "bbml/onnx_runner.hpp"
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,6 +13,27 @@
 #endif
 
 namespace bbml {
+
+namespace {
+
+void fillSingleInputFeatures(const CandidateFeature& c, float* dst, size_t d) {
+  std::fill(dst, dst + d, 0.0f);
+  if (d > 0) dst[0] = static_cast<float>(c.obj);
+  if (d > 1) dst[1] = static_cast<float>(c.reduced_cost);
+  if (d > 2) dst[2] = static_cast<float>(c.fracval);
+  if (d > 3) dst[3] = static_cast<float>(c.domain_width);
+  if (d > 4) dst[4] = static_cast<float>(c.is_binary);
+  if (d > 5) dst[5] = static_cast<float>(c.is_integer);
+  if (d > 6) dst[6] = static_cast<float>(c.pseudocost_up);
+  if (d > 7) dst[7] = static_cast<float>(c.pseudocost_down);
+  if (d > 8) dst[8] = static_cast<float>(c.pc_obs_up);
+  if (d > 9) dst[9] = static_cast<float>(c.pc_obs_down);
+  if (d > 10) dst[10] = static_cast<float>(c.at_lb);
+  if (d > 11) dst[11] = static_cast<float>(c.at_ub);
+  if (d > 12) dst[12] = static_cast<float>(c.col_nnz);
+}
+
+}  // namespace
 
 #ifdef BBML_WITH_ONNX
 struct OnnxRunner::OrtHolder {
@@ -44,6 +66,15 @@ void OnnxRunner::ensure_session_() {
     ort_->output_name_strs.emplace_back(name.get());
   }
   ort_->input_count = icount;
+  ort_->input_dim = 0;
+  if (icount == 1) {
+    auto type_info = ort_->session->GetInputTypeInfo(0);
+    auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+    auto shape = tensor_info.GetShape();
+    if (shape.size() >= 2 && shape[1] > 0) {
+      ort_->input_dim = static_cast<size_t>(shape[1]);
+    }
+  }
 }
 
 void OnnxRunner::destroy_session_() {
@@ -86,18 +117,12 @@ std::pair<std::vector<double>, double> OnnxRunner::score_candidates(
 
   if (ort_->input_count <= 1) {
     // MLP or var-only GNN signature: single [m, d]
-    const size_t d = 6;
+    const size_t d = ort_->input_dim > 0 ? ort_->input_dim : 10;
     std::vector<float> x(m * d, 0.0f);
     for (size_t i = 0; i < m; ++i) {
-      const auto& c = feats.candidates[i];
-      x[i * d + 0] = static_cast<float>(c.obj);
-      x[i * d + 1] = static_cast<float>(c.reduced_cost);
-      x[i * d + 2] = static_cast<float>(c.fracval);
-      x[i * d + 3] = static_cast<float>(c.domain_width);
-      x[i * d + 4] = static_cast<float>(c.is_binary);
-      x[i * d + 5] = static_cast<float>(c.is_integer);
+      fillSingleInputFeatures(feats.candidates[i], x.data() + (i * d), d);
     }
-    std::array<int64_t, 2> shape{static_cast<int64_t>(m), 6};
+    std::array<int64_t, 2> shape{static_cast<int64_t>(m), static_cast<int64_t>(d)};
     Ort::Value in0 = Ort::Value::CreateTensor<float>(alloc, shape.data(), shape.size());
     std::memcpy(in0.GetTensorMutableData<float>(), x.data(), x.size() * sizeof(float));
     inputs.emplace_back(std::move(in0));

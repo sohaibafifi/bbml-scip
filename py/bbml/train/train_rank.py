@@ -23,6 +23,17 @@ DEFAULT_FEATS = [
     "domain_width",
     "is_binary",
     "is_integer",
+    "pseudocost_up",
+    "pseudocost_down",
+    "pc_obs_up",
+    "pc_obs_down",
+]
+
+GRAPH_VAR_FEATS = [
+    *DEFAULT_FEATS,
+    "at_lb",
+    "at_ub",
+    "col_nnz",
 ]
 
 
@@ -86,8 +97,12 @@ class NodeDataset(Dataset):
                     chosen = int(chosen_by_node[node_id])
                 elif "chosen" in g.columns:
                     chosen = int(g["chosen"].astype(int).iloc[0])
+                elif {"pseudocost_up", "pseudocost_down"}.issubset(g.columns):
+                    up = torch.tensor(g["pseudocost_up"].astype(float).values, dtype=torch.float32)
+                    down = torch.tensor(g["pseudocost_down"].astype(float).values, dtype=torch.float32)
+                    chosen = int(torch.argmax(torch.maximum(up, down)).item())
                 else:
-                    # Heuristic: pick argmax reduced_cost magnitude
+                    # Last-resort heuristic: pick argmax reduced_cost magnitude.
                     chosen = int(torch.argmax(torch.abs(X[:, self.feature_cols.index("reduced_cost")])).item())
             self.groups.append(NodeGroup(X=X, y_true=y_true, chosen=chosen))
 

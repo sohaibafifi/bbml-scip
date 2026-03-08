@@ -10,7 +10,7 @@ struct CandidateFeature {
   double obj, reduced_cost, fracval, domain_width;
   int is_binary, is_integer, is_indicator, is_sos;
   double pseudocost_up, pseudocost_down;
-  int pc_obs_up, pc_obs_down;
+  double pc_obs_up, pc_obs_down;
   // Additional runtime state
   int at_lb, at_ub;     // whether current LP solution is at local bounds
   int col_nnz;          // number of nonzeros in LP column (approx degree)

@@ -91,10 +91,10 @@
             "type": "number"
           },
           "pc_obs_up": {
-            "type": "integer"
+            "type": "number"
           },
           "pc_obs_down": {
-            "type": "integer"
+            "type": "number"
           },
           "is_binary": {
             "type": "integer"

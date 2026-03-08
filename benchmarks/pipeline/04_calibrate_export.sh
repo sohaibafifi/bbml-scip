@@ -107,10 +107,11 @@ PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
 MODEL_DIR="$MODEL_DIR" \
 RESULTS_DIR="$RESULTS_DIR" \
 DATA_DIR="$DATA_DIR" \
-python3 - <<'PY'
+"${PYTHON_CMD[@]}" - <<'PY'
 import json
 import os
 from pathlib import Path
+import torch
 
 py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
 model_dir = Path(os.environ["MODEL_DIR"])
@@ -119,6 +120,19 @@ data_dir = Path(os.environ["DATA_DIR"])
 manifest = data_dir / "manifests" / "latency_tasks.jsonl"
 log_dir = data_dir / "pipeline_logs" / "export"
 log_dir.mkdir(parents=True, exist_ok=True)
+
+
+def load_cfg(name: str) -> dict:
+    ckpt = torch.load(model_dir / name, map_location="cpu")
+    cfg = ckpt.get("cfg", {}) if isinstance(ckpt, dict) else {}
+    if not isinstance(cfg, dict):
+        raise ValueError(f"missing cfg metadata in checkpoint {name}")
+    return cfg
+
+
+graph_cfg = load_cfg("bbml_gnn_graph_best.pt")
+varonly_cfg = load_cfg("bbml_gnn_varonly_best.pt")
+mlp_cfg = load_cfg("bbml_mlp_best.pt")
 
 tasks = [
     (
@@ -130,9 +144,9 @@ tasks = [
             "--onnx",
             str(model_dir / "bbml_gnn_graph_fp32.onnx"),
             "--d_var",
-            "9",
+            str(graph_cfg.get("d_var", 13)),
             "--d_con",
-            "4",
+            str(graph_cfg.get("d_con", 4)),
             "--runs",
             "100",
         ],
@@ -147,9 +161,9 @@ tasks = [
             "--onnx",
             str(model_dir / "bbml_gnn_graph_fp16.onnx"),
             "--d_var",
-            "9",
+            str(graph_cfg.get("d_var", 13)),
             "--d_con",
-            "4",
+            str(graph_cfg.get("d_con", 4)),
             "--runs",
             "100",
         ],
@@ -164,7 +178,7 @@ tasks = [
             "--onnx",
             str(model_dir / "bbml_gnn_varonly.onnx"),
             "--d",
-            "6",
+            str(varonly_cfg.get("d_var", 10)),
             "--runs",
             "100",
         ],
@@ -179,7 +193,7 @@ tasks = [
             "--onnx",
             str(model_dir / "bbml_mlp.onnx"),
             "--d",
-            "6",
+            str(mlp_cfg.get("d_in", 10)),
             "--runs",
             "100",
         ],

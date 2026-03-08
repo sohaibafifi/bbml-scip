@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <vector>
 #include "scip/lp.h"
+#include "scip/scip_var.h"
 namespace bbml {
 
 ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
@@ -58,10 +59,10 @@ ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
     cf.is_integer = it->second.is_integer;
     cf.is_indicator = it->second.is_indicator;
     cf.is_sos = it->second.is_sos;
-    cf.pseudocost_up = 0.0;
-    cf.pseudocost_down = 0.0;
-    cf.pc_obs_up = 0;
-    cf.pc_obs_down = 0;
+    cf.pseudocost_up = SCIPgetVarPseudocost(scip, v, SCIP_BRANCHDIR_UPWARDS);
+    cf.pseudocost_down = SCIPgetVarPseudocost(scip, v, SCIP_BRANCHDIR_DOWNWARDS);
+    cf.pc_obs_up = SCIPgetVarPseudocostCount(scip, v, SCIP_BRANCHDIR_UPWARDS);
+    cf.pc_obs_down = SCIPgetVarPseudocostCount(scip, v, SCIP_BRANCHDIR_DOWNWARDS);
     // Bounds status at current LP solution
     SCIP_Real lb = SCIPvarGetLbLocal(v);
     SCIP_Real ub = SCIPvarGetUbLocal(v);
@@ -79,7 +80,7 @@ ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
 
   // Build graph snapshot (constraints ↔ candidate variables)
   // var_feat: [ncands, d_var]
-  const int dvar = 9;  // obj, redcost, frac, domw, is_bin, is_int, at_lb, at_ub, col_nnz
+  const int dvar = 13;  // obj, redcost, frac, domw, is_bin, is_int, pscost_up/down, obs_up/down, at_lb, at_ub, col_nnz
   out.graph.n_var = ncands;
   out.graph.d_var = dvar;
   out.graph.var_feat.resize(static_cast<size_t>(ncands) * dvar);
@@ -92,9 +93,13 @@ ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
     dst[3] = c.domain_width;
     dst[4] = static_cast<double>(c.is_binary);
     dst[5] = static_cast<double>(c.is_integer);
-    dst[6] = static_cast<double>(c.at_lb);
-    dst[7] = static_cast<double>(c.at_ub);
-    dst[8] = static_cast<double>(c.col_nnz);
+    dst[6] = c.pseudocost_up;
+    dst[7] = c.pseudocost_down;
+    dst[8] = c.pc_obs_up;
+    dst[9] = c.pc_obs_down;
+    dst[10] = static_cast<double>(c.at_lb);
+    dst[11] = static_cast<double>(c.at_ub);
+    dst[12] = static_cast<double>(c.col_nnz);
   }
 
   // Build constraint features and edges by scanning candidate columns; avoids SCIPgetLP

@@ -17,6 +17,10 @@ def test_node_dataset_grouping(tmp_path):
                     "domain_width": 1.0,
                     "is_binary": 1,
                     "is_integer": 1,
+                    "pseudocost_up": float(vid + 1),
+                    "pseudocost_down": float(vid + 2),
+                    "pc_obs_up": float(vid + 3),
+                    "pc_obs_down": float(vid + 4),
                     "chosen_idx": 1,
                 }
             )
