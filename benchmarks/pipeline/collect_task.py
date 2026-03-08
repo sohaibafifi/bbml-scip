@@ -12,6 +12,15 @@ def _quote(path: str) -> str:
     return '"' + path.replace('"', '\\"') + '"'
 
 
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run one SCIP telemetry collection task.")
     ap.add_argument("--runner-bin", required=True)
@@ -30,6 +39,11 @@ def main() -> int:
     for path in (candidate_out, graph_out, scip_log):
         path.parent.mkdir(parents=True, exist_ok=True)
 
+    with tempfile.NamedTemporaryFile("w", suffix=".ndjson.tmp", dir=str(candidate_out.parent), delete=False) as tmp_candidate:
+        candidate_tmp = Path(tmp_candidate.name)
+    with tempfile.NamedTemporaryFile("w", suffix=".ndjson.tmp", dir=str(graph_out.parent), delete=False) as tmp_graph:
+        graph_tmp = Path(tmp_graph.name)
+
     set_path = ""
     with tempfile.NamedTemporaryFile("w", suffix=".set", delete=False) as tmp:
         tmp.write(f"limits/time = {args.time_limit}\n")
@@ -39,10 +53,10 @@ def main() -> int:
         tmp.write('bbml/model_path = ""\n')
         tmp.write("bbml/telemetry = TRUE\n")
         tmp.write("bbml/telemetry/append = FALSE\n")
-        tmp.write(f"bbml/telemetry/path = {_quote(str(candidate_out))}\n")
+        tmp.write(f"bbml/telemetry/path = {_quote(str(candidate_tmp))}\n")
         tmp.write("bbml/telemetry/strongbranch = TRUE\n")
         tmp.write("bbml/telemetry/graph = TRUE\n")
-        tmp.write(f"bbml/telemetry/graph_path = {_quote(str(graph_out))}\n")
+        tmp.write(f"bbml/telemetry/graph_path = {_quote(str(graph_tmp))}\n")
         set_path = tmp.name
     cmd = [args.runner_bin, "--problem", args.instance, "--set", set_path]
     try:
@@ -55,23 +69,16 @@ def main() -> int:
             except OSError:
                 pass
     if proc.returncode != 0:
-        for path in (candidate_out, graph_out):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                pass
+        _safe_unlink(candidate_tmp)
+        _safe_unlink(graph_tmp)
     else:
-        for path in (candidate_out, graph_out):
+        for path in (candidate_tmp, graph_tmp):
             if not path.is_file() or path.stat().st_size == 0:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    pass
+                _safe_unlink(candidate_tmp)
+                _safe_unlink(graph_tmp)
                 return 1
+        candidate_tmp.replace(candidate_out)
+        graph_tmp.replace(graph_out)
     return int(proc.returncode)
 
 

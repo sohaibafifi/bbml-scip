@@ -16,6 +16,7 @@ TL="${COLLECT_TL:-3600}"
 MAX_NODES="${COLLECT_MAX_NODES:-5000}"
 COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
+COLLECT_FORCE="${COLLECT_FORCE:-0}"
 
 IFS=',' read -ra SPLIT_LIST <<< "$COLLECT_SPLITS"
 PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
@@ -52,14 +53,17 @@ echo "  Seeds        : $SEEDS"
 echo "  Time limit   : ${TL}s"
 echo "  Max nodes    : $MAX_NODES"
 echo "  Collect jobs : $COLLECT_JOBS"
+echo "  Resume mode  : $([ "$COLLECT_FORCE" = "1" ] && printf 'off (force rerun)' || printf 'on')"
 echo "  Runner       : $BBML_RUNNER_BIN"
 echo ""
+
+manifest="$DATA_DIR/manifests/collect_tasks.jsonl"
+: > "$manifest"
 
 for family in "${families[@]}"; do
   for split in "${SPLIT_LIST[@]}"; do
     list_file="$INSTANCES_DIR/${family}_${split}.txt"
     [ ! -f "$list_file" ] && continue
-    manifest="$DATA_DIR/manifests/collect_${family}_${split}.jsonl"
     echo "--- $family/$split ---"
     FAMILY="$family" \
     SPLIT="$split" \
@@ -72,6 +76,7 @@ for family in "${families[@]}"; do
     SEEDS="$SEEDS" \
     TL="$TL" \
     MAX_NODES="$MAX_NODES" \
+    FORCE="$COLLECT_FORCE" \
     python3 - <<'PY'
 import json
 import os
@@ -106,6 +111,7 @@ runner_bin = os.environ["BBML_RUNNER"]
 seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
 time_limit = os.environ["TL"]
 max_nodes = os.environ["MAX_NODES"]
+force = os.environ["FORCE"] == "1"
 
 candidate_dir = data_dir / "logs" / family / split / "candidates"
 graph_dir = data_dir / "logs" / family / split / "graph"
@@ -114,7 +120,10 @@ for path in (candidate_dir, graph_dir, scip_dir):
     path.mkdir(parents=True, exist_ok=True)
 
 manifest.parent.mkdir(parents=True, exist_ok=True)
-with list_file.open() as src, manifest.open("w") as out:
+total = 0
+skipped = 0
+runnable = 0
+with list_file.open() as src, manifest.open("a") as out:
     for line in src:
         inst = line.strip()
         if not inst:
@@ -122,16 +131,23 @@ with list_file.open() as src, manifest.open("w") as out:
         inst_path = Path(inst)
         iid = instance_id(inst_path)
         for seed in seeds:
+            total += 1
             candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
             graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
             scip_log = scip_dir / f"{iid}_s{seed}.log"
-            skip = (
-                candidate_out.is_file()
-                and candidate_out.stat().st_size > 0
-                and graph_out.is_file()
-                and graph_out.stat().st_size > 0
-                and completed_log(scip_log)
-            )
+            skip = False
+            if not force:
+                skip = (
+                    candidate_out.is_file()
+                    and candidate_out.stat().st_size > 0
+                    and graph_out.is_file()
+                    and graph_out.stat().st_size > 0
+                    and completed_log(scip_log)
+                )
+            if skip:
+                skipped += 1
+            else:
+                runnable += 1
             rec = {
                 "name": f"collect:{family}:{split}:{iid}:s{seed}",
                 "cmd": py_launch
@@ -159,10 +175,13 @@ with list_file.open() as src, manifest.open("w") as out:
                 "skip": skip,
             }
             out.write(json.dumps(rec) + "\n")
+print(f"  queued total={total} runnable={runnable} skipped={skipped}")
 PY
-    "${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$COLLECT_JOBS"
     echo ""
   done
 done
 
+"${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$COLLECT_JOBS"
+
+echo ""
 echo "Collection complete."
