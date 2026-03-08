@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Step 01: Collect candidate and graph telemetry for train/val splits.
-set -euo pipefail
+# set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BBML_ROOT="${BBML_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
@@ -86,6 +86,15 @@ def instance_id(path: Path) -> str:
             name = name[: -len(suffix)]
     return name
 
+def completed_log(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return False
+    return "BBML_SUMMARY" in text
+
 family = os.environ["FAMILY"]
 split = os.environ["SPLIT"]
 list_file = Path(os.environ["LIST_FILE"])
@@ -116,7 +125,13 @@ with list_file.open() as src, manifest.open("w") as out:
             candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
             graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
             scip_log = scip_dir / f"{iid}_s{seed}.log"
-            skip = candidate_out.is_file() and candidate_out.stat().st_size > 0 and graph_out.is_file() and graph_out.stat().st_size > 0
+            skip = (
+                candidate_out.is_file()
+                and candidate_out.stat().st_size > 0
+                and graph_out.is_file()
+                and graph_out.stat().st_size > 0
+                and completed_log(scip_log)
+            )
             rec = {
                 "name": f"collect:{family}:{split}:{iid}:s{seed}",
                 "cmd": py_launch

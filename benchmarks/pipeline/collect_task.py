@@ -54,6 +54,24 @@ def main() -> int:
                 os.unlink(set_path)
             except OSError:
                 pass
+    if proc.returncode != 0:
+        for path in (candidate_out, graph_out):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+    else:
+        for path in (candidate_out, graph_out):
+            if not path.is_file() or path.stat().st_size == 0:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+                return 1
     return int(proc.returncode)
 
 

@@ -51,6 +51,19 @@ struct BranchruleData {
   std::string last_tpath;
 };
 
+static bool isCandidateBranchable(SCIP* scip, SCIP_VAR* var) {
+  if (var == nullptr) {
+    return false;
+  }
+  SCIP_Real lb = SCIPvarGetLbLocal(var);
+  SCIP_Real ub = SCIPvarGetUbLocal(var);
+  if (SCIPisGE(scip, lb, ub)) {
+    return false;
+  }
+  SCIP_Real lpsol = SCIPvarGetLPSol(var);
+  return !SCIPisFeasIntegral(scip, lpsol);
+}
+
 static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
                                      SCIP_BRANCHRULE* branchrule,
                                      SCIP_Bool /*allowaddcons*/,
@@ -136,6 +149,10 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     *result = SCIP_DIDNOTRUN;
     return SCIP_OKAY;
   }
+  std::vector<SCIP_VAR*> candvars(static_cast<size_t>(nc), nullptr);
+  for (int i = 0; i < nc; ++i) {
+    candvars[static_cast<size_t>(i)] = cands[i];
+  }
   // optional strong-branch scores for telemetry
   std::vector<double> sb_up, sb_down;
   if (telemetry && tlogsb) {
@@ -180,7 +197,23 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
       getTelemetryLogger().log_graph_snapshot(scip, focus, feats, idx, sup, sdown);
     }
   }
-  SCIP_VAR* var = cands[idx];
+  if (!isCandidateBranchable(scip, candvars[static_cast<size_t>(idx)])) {
+    int fallback_idx = -1;
+    for (int i = 0; i < nc; ++i) {
+      if (!isCandidateBranchable(scip, candvars[static_cast<size_t>(i)])) {
+        continue;
+      }
+      if (fallback_idx < 0 || blended[static_cast<size_t>(i)] > blended[static_cast<size_t>(fallback_idx)]) {
+        fallback_idx = i;
+      }
+    }
+    if (fallback_idx < 0) {
+      *result = SCIP_DIDNOTRUN;
+      return SCIP_OKAY;
+    }
+    idx = fallback_idx;
+  }
+  SCIP_VAR* var = candvars[static_cast<size_t>(idx)];
   SCIP_Real brpt = SCIPvarGetLPSol(var);
   SCIP_NODE* down = nullptr;
   SCIP_NODE* eq = nullptr;
