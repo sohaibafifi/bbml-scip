@@ -42,3 +42,38 @@ baselines:
     ml: true
     model: results/models/bbml_gnn_graph_fp16.onnx
     temperature: results/models/bbml_gnn_graph.temperature.txt
+
+  pure-imitation:
+    description: "Graph-input GNN with alpha fixed to 1.0"
+    ml: true
+    model: results/models/bbml_gnn_graph.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt
+
+  alpha-fixed-0.5:
+    description: "Graph-input GNN with alpha fixed to 0.5"
+    ml: true
+    model: results/models/bbml_gnn_graph.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt
+
+  solver-only-alpha0:
+    description: "Graph-input GNN with alpha fixed to 0.0"
+    ml: true
+    model: results/models/bbml_gnn_graph.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt
+
+  no-temperature:
+    description: "Graph-input GNN with temperature disabled"
+    ml: true
+    model: results/models/bbml_gnn_graph.onnx
+
+  no-cond-gate:
+    description: "Graph-input GNN with the numerical fallback disabled"
+    ml: true
+    model: results/models/bbml_gnn_graph.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt
+
+  no-conf-gate:
+    description: "Graph-input GNN with the confidence gate disabled"
+    ml: true
+    model: results/models/bbml_gnn_graph.onnx
+    temperature: results/models/bbml_gnn_graph.temperature.txt

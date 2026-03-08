@@ -14,6 +14,24 @@ ablations:
   bbml-gnn-graph:
     description: "Graph-input GNN ranker"
 
+  pure-imitation:
+    description: "Graph-input GNN with alpha fixed to 1.0"
+
+  alpha-fixed-0.5:
+    description: "Graph-input GNN with alpha fixed to 0.5"
+
+  solver-only-alpha0:
+    description: "Graph-input GNN with alpha fixed to 0.0"
+
+  no-temperature:
+    description: "Graph-input GNN with temperature disabled (T=1)"
+
+  no-cond-gate:
+    description: "Graph-input GNN with numerics gate effectively disabled"
+
+  no-conf-gate:
+    description: "Graph-input GNN with the confidence gate disabled"
+
   bbml-gnn-graph-fp32:
     description: "Graph-input GNN ranker, FP32 export"
 

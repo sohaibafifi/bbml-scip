@@ -4,6 +4,7 @@
 Reads all per-run JSON files under --results, computes per-solver KPIs:
   - Shifted geometric mean (SGM) of solve time and node count
   - % instances solved to optimality
+  - Wins / ties / losses vs. a chosen baseline
   - Wilcoxon signed-rank test vs. a chosen baseline
 
 Output: CSV with one row per (solver, instance_set).
@@ -73,6 +74,7 @@ def assign_instance_set(df: pd.DataFrame, instances_dir: Path) -> pd.DataFrame:
 def compute_kpis(
     df: pd.DataFrame,
     baseline: str = "scip-default",
+    wtl_threshold: float = 0.05,
 ) -> pd.DataFrame:
     df = df.copy()
     # Cap timed-out runs
@@ -82,13 +84,16 @@ def compute_kpis(
     df.loc[~df["status"].isin(["optimal", "infeasible"]), "n_nodes"] = df["n_nodes"].max()
 
     solvers = sorted(df["solver"].unique())
-    instance_sets = sorted(df["instance_set"].unique())
+    instance_sets = ["all", *sorted(df["instance_set"].unique())]
     base_df = df[df["solver"] == baseline]
 
     records = []
     for iset in instance_sets:
         iset_df = df[df["instance_set"] == iset]
         base_iset = base_df[base_df["instance_set"] == iset]
+        if iset == "all":
+            iset_df = df
+            base_iset = base_df
 
         for solver in solvers:
             s_df = iset_df[iset_df["solver"] == solver]
@@ -100,7 +105,8 @@ def compute_kpis(
             solved_pct = (s_df["status"].isin(["optimal", "infeasible"])).mean() * 100
 
             p_time = p_nodes = 1.0
-            if solver != baseline and len(base_iset) > 1:
+            wins = ties = losses = 0
+            if solver != baseline and not base_iset.empty:
                 merged = s_df.merge(
                     base_iset[["instance_id", "seed", "solve_time", "n_nodes"]],
                     on=["instance_id", "seed"],
@@ -120,6 +126,24 @@ def compute_kpis(
                         )
                     except Exception:
                         pass
+                for _, row in merged.iterrows():
+                    base_time = float(row["solve_time_base"])
+                    solve_time = float(row["solve_time"])
+                    if base_time <= 1e-9:
+                        if solve_time <= 1e-9:
+                            ties += 1
+                        else:
+                            losses += 1
+                        continue
+                    rel = (base_time - solve_time) / base_time
+                    if rel > wtl_threshold:
+                        wins += 1
+                    elif rel < -wtl_threshold:
+                        losses += 1
+                    else:
+                        ties += 1
+            elif solver == baseline:
+                ties = len(s_df)
 
             records.append(
                 dict(
@@ -133,6 +157,11 @@ def compute_kpis(
                     p_nodes=round(p_nodes, 4),
                     sig_time=p_time < 0.05,
                     sig_nodes=p_nodes < 0.05,
+                    wtl_wins=wins,
+                    wtl_ties=ties,
+                    wtl_losses=losses,
+                    wtl=f"{wins}/{ties}/{losses}",
+                    wtl_win_pct=round((wins / max(1, wins + ties + losses)) * 100, 1),
                 )
             )
 
@@ -144,6 +173,7 @@ def main():
     ap.add_argument("--results", required=True, type=Path, help="Dir with recursive per-run JSON files")
     ap.add_argument("--instance-sets", type=Path, default=None, help="Dir with instance list *.txt files (for set tagging)")
     ap.add_argument("--baseline", default="scip-default", help="Reference solver for Wilcoxon")
+    ap.add_argument("--wtl-threshold", type=float, default=0.05, help="Relative threshold for wins/ties/losses vs baseline")
     ap.add_argument("--out", required=True, type=Path, help="Output CSV path")
     args = ap.parse_args()
 
@@ -156,7 +186,7 @@ def main():
     else:
         df["instance_set"] = "all"
 
-    kpis = compute_kpis(df, baseline=args.baseline)
+    kpis = compute_kpis(df, baseline=args.baseline, wtl_threshold=args.wtl_threshold)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     kpis.to_csv(args.out, index=False)

@@ -25,6 +25,9 @@ class BranchruleML {
     amin_ = amin; amax_ = amax; depth_penalty_ = depth_penalty;
   }
   void set_alpha_theta(double theta) { theta_ = theta; }
+  void set_use_confidence_gate(bool use_confidence_gate) {
+    use_confidence_gate_ = use_confidence_gate;
+  }
   void set_temperature(double T) { temperature_ = (T <= 0.0 ? 1.0 : T); }
 
  private:
@@ -34,6 +37,7 @@ class BranchruleML {
   double depth_penalty_ = 0.02;
   double theta_ = 0.5;
   double temperature_ = 1.0;
+  bool use_confidence_gate_ = true;
 };
 
 SCIP_RETCODE includeBranchruleML(SCIP* scip);

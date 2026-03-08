@@ -43,7 +43,9 @@ int BranchruleML::choose(const ExtractedFeatures& feats,
       has_runtime_confidence ? sc.second : confidence, 0.0, 1.0);
   const double alpha_depth = std::clamp(
       amax_ - depth_penalty_ * depth, amin_, amax_);
-  const double confidence_gate = sigmoid(12.0 * (effective_confidence - theta_));
+  const double confidence_gate = use_confidence_gate_
+                                     ? sigmoid(12.0 * (effective_confidence - theta_))
+                                     : 1.0;
   const double alpha = amin_ + (alpha_depth - amin_) * confidence_gate;
   if (alpha_used) {
     *alpha_used = alpha;
@@ -109,6 +111,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   SCIP_Bool tappend = TRUE;
   SCIP_Bool tgraph = FALSE;
   SCIP_Bool talpha = FALSE;
+  SCIP_Bool use_confidence_gate = TRUE;
   SCIP_Real a_min = 0.1, a_max = 0.8, depth_pen = 0.02;
   SCIP_Real a_theta = 0.5;
   SCIP_Real confidence = 0.5;  // base confidence
@@ -124,6 +127,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/strongbranch", &tlogsb);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/graph", &tgraph);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/alpha", &talpha);
+  (void)SCIPgetBoolParam(scip, "bbml/alpha/use_confidence_gate", &use_confidence_gate);
   (void)SCIPgetRealParam(scip, "bbml/alpha/min", &a_min);
   (void)SCIPgetRealParam(scip, "bbml/alpha/max", &a_max);
   (void)SCIPgetRealParam(scip, "bbml/alpha/depth_penalty", &depth_pen);
@@ -170,6 +174,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   // update blending params
   data->br->set_alpha_params(a_min, a_max, depth_pen);
   data->br->set_alpha_theta(static_cast<double>(a_theta));
+  data->br->set_use_confidence_gate(use_confidence_gate == TRUE);
   data->br->set_temperature(static_cast<double>(temperature));
   // gate confidence by numerics (e.g., ill-conditioned LP)
   SCIP_Real eff_conf = (feats.node.cond_est > cond_thresh) ? 0.0 : confidence;
@@ -332,6 +337,9 @@ SCIP_RETCODE includeBranchruleML(SCIP* scip) {
   SCIP_CALL(SCIPaddRealParam(scip, "bbml/alpha/theta",
       "confidence midpoint for alpha gating", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
       /*default*/ 0.5, /*min*/ 0.0, /*max*/ 1.0, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
+  SCIP_CALL(SCIPaddBoolParam(scip, "bbml/alpha/use_confidence_gate",
+      "whether alpha uses the runtime confidence sigmoid gate", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
+      /*default*/ TRUE, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddRealParam(scip, "bbml/confidence",
       "fallback confidence used when runtime uncertainty is unavailable", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
       /*default*/ 0.5, /*min*/ 0.0, /*max*/ 1.0, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));

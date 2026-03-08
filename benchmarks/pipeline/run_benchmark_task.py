@@ -36,6 +36,11 @@ def main() -> int:
     ap.add_argument("--alpha-min", type=float, default=None)
     ap.add_argument("--alpha-max", type=float, default=None)
     ap.add_argument("--depth-penalty", type=float, default=None)
+    ap.add_argument("--alpha-theta", type=float, default=None)
+    ap.add_argument("--temperature", type=float, default=None)
+    ap.add_argument("--confidence", type=float, default=None)
+    ap.add_argument("--cond-threshold", type=float, default=None)
+    ap.add_argument("--disable-confidence-gate", action="store_true")
     args = ap.parse_args()
 
     result_out = Path(args.result_out)
@@ -54,16 +59,26 @@ def main() -> int:
             tmp.write("bbml/enable = TRUE\n")
             if args.model:
                 tmp.write(f'bbml/model_path = "{args.model}"\n')
-            if args.temperature_file and Path(args.temperature_file).is_file():
+            if args.temperature is not None:
+                tmp.write(f"bbml/temperature = {args.temperature}\n")
+            elif args.temperature_file and Path(args.temperature_file).is_file():
                 temperature = Path(args.temperature_file).read_text().strip()
                 if temperature:
                     tmp.write(f"bbml/temperature = {temperature}\n")
+            if args.confidence is not None:
+                tmp.write(f"bbml/confidence = {args.confidence}\n")
         if args.alpha_min is not None:
             tmp.write(f"bbml/alpha/min = {args.alpha_min}\n")
         if args.alpha_max is not None:
             tmp.write(f"bbml/alpha/max = {args.alpha_max}\n")
         if args.depth_penalty is not None:
             tmp.write(f"bbml/alpha/depth_penalty = {args.depth_penalty}\n")
+        if args.alpha_theta is not None:
+            tmp.write(f"bbml/alpha/theta = {args.alpha_theta}\n")
+        if args.disable_confidence_gate:
+            tmp.write("bbml/alpha/use_confidence_gate = FALSE\n")
+        if args.cond_threshold is not None:
+            tmp.write(f"bbml/numerics/cond_threshold = {args.cond_threshold}\n")
         if args.solver == "strong-branch":
             tmp.write("branching/fullstrong/priority = 1000000\n")
             tmp.write("bbml/enable = FALSE\n")

@@ -4,6 +4,8 @@
 Reads the output of kpis.py and produces:
   - Table 1: main comparison (SGM time + nodes, all instance sets)
   - Table 2: ablation results
+  - Table 3: wins / ties / losses vs. baseline
+  - Table 4: optional branching top-1 accuracy
 
 Usage:
     uv run python benchmarks/eval/summary_table.py \\
@@ -37,17 +39,29 @@ SOLVER_LABELS = {
 }
 
 ABLATION_ORDER = [
+    "bbml-gnn-graph",
+    "alpha-fixed-0.5",
+    "pure-imitation",
+    "solver-only-alpha0",
+    "no-temperature",
+    "no-cond-gate",
+    "no-conf-gate",
     "bbml-mlp",
     "bbml-gnn-varonly",
-    "bbml-gnn-graph",
     "bbml-gnn-graph-fp32",
     "bbml-gnn-graph-fp16",
 ]
 
 ABLATION_LABELS = {
+    "bbml-gnn-graph": r"Graph GNN",
+    "alpha-fixed-0.5": r"Fixed $\alpha = 0.5$",
+    "pure-imitation": r"Pure imitation ($\alpha = 1.0$)",
+    "solver-only-alpha0": r"Solver-only blend ($\alpha = 0.0$)",
+    "no-temperature": r"No temperature calibration",
+    "no-cond-gate": r"No condition gate",
+    "no-conf-gate": r"No confidence gate",
     "bbml-mlp": r"MLP ranker",
     "bbml-gnn-varonly": r"Var-only GNN",
-    "bbml-gnn-graph": r"Graph GNN",
     "bbml-gnn-graph-fp32": r"Graph GNN FP32",
     "bbml-gnn-graph-fp16": r"Graph GNN FP16",
 }
@@ -159,7 +173,7 @@ def build_ablation_table(df: pd.DataFrame, iset: str = "sc_test") -> str:
     lines = []
     lines.append(r"\begin{table}[t]")
     lines.append(r"\centering")
-    lines.append(r"\caption{Model and precision comparisons on the selected benchmark split. SGM(10). Lower is better.}")
+    lines.append(r"\caption{Low-cost ablations on the selected benchmark split. SGM(10). Lower is better.}")
     lines.append(r"\label{tab:ablations}")
     lines.append(r"\begin{tabular}{lcc}")
     lines.append(r"\toprule")
@@ -168,7 +182,11 @@ def build_ablation_table(df: pd.DataFrame, iset: str = "sc_test") -> str:
 
     current_group = None
     for abl in ablations:
-        group = abl.split("-")[0].upper()
+        group = "GRAPH"
+        if abl in {"bbml-mlp", "bbml-gnn-varonly"}:
+            group = "ENCODER"
+        elif abl in {"bbml-gnn-graph-fp32", "bbml-gnn-graph-fp16"}:
+            group = "PRECISION"
         if group != current_group:
             if current_group is not None:
                 lines.append(r"\midrule")
@@ -190,11 +208,84 @@ def build_ablation_table(df: pd.DataFrame, iset: str = "sc_test") -> str:
     return "\n".join(lines)
 
 
+def build_wtl_table(df: pd.DataFrame, iset: str = "all") -> str:
+    sub: pd.DataFrame = df[df["instance_set"] == iset]  # type: ignore[assignment]
+    if sub.empty or "wtl" not in sub.columns:
+        return "% No W/T/L data found.\n"
+
+    preferred = [
+        "scip-default",
+        "strong-branch",
+        "bbml-mlp",
+        "bbml-gnn-varonly",
+        "bbml-gnn-graph",
+        "alpha-fixed-0.5",
+        "pure-imitation",
+        "solver-only-alpha0",
+        "no-temperature",
+        "no-cond-gate",
+        "no-conf-gate",
+    ]
+    present = set(sub["solver"].to_numpy().tolist())
+    solvers = [solver for solver in preferred if solver in present]
+    if not solvers:
+        solvers = sorted(present)
+
+    lines = []
+    lines.append(r"\begin{table}[t]")
+    lines.append(r"\centering")
+    lines.append(r"\caption{Wins / ties / losses versus \texttt{scip-default}. A win is a $>5\%$ reduction in solve time on the matched instance-seed run.}")
+    lines.append(r"\label{tab:wtl}")
+    lines.append(r"\begin{tabular}{lcc}")
+    lines.append(r"\toprule")
+    lines.append(r"\textbf{Method} & \textbf{W/T/L} & \textbf{Win \%} \\")
+    lines.append(r"\midrule")
+    for solver in solvers:
+        solver_sub: pd.DataFrame = sub[sub["solver"] == solver]  # type: ignore[assignment]
+        if solver_sub.empty:
+            continue
+        row = solver_sub.iloc[0]
+        label = SOLVER_LABELS.get(solver, ABLATION_LABELS.get(solver, r"\texttt{" + solver + "}"))
+        lines.append(f"{label} & {row['wtl']} & {float(row['wtl_win_pct']):.1f} \\\\")
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+    lines.append(r"\end{table}")
+    return "\n".join(lines)
+
+
+def build_accuracy_table(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "% No accuracy data found.\n"
+    lines = []
+    lines.append(r"\begin{table}[t]")
+    lines.append(r"\centering")
+    lines.append(r"\caption{Held-out branching top-1 accuracy.}")
+    lines.append(r"\label{tab:top1acc}")
+    lines.append(r"\begin{tabular}{lcc}")
+    lines.append(r"\toprule")
+    lines.append(r"\textbf{Model} & \textbf{Top-1 Acc.} & \textbf{Branch Nodes} \\")
+    lines.append(r"\midrule")
+    best = float(df["top1_acc"].max())
+    for _, row in df.sort_values("top1_acc", ascending=False).iterrows():
+        label = SOLVER_LABELS.get(str(row["model"]), ABLATION_LABELS.get(str(row["model"]), r"\texttt{" + str(row["model"]) + "}"))
+        acc = float(row["top1_acc"])
+        acc_str = f"{acc:.3f}"
+        if abs(acc - best) < 1e-9:
+            acc_str = r"\textbf{" + acc_str + "}"
+        lines.append(f"{label} & {acc_str} & {int(row['n_groups'])} \\\\")
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+    lines.append(r"\end{table}")
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--kpis", required=True, type=Path, help="KPI CSV from kpis.py")
     ap.add_argument("--out", required=True, type=Path, help="Output directory for .tex files")
     ap.add_argument("--ablation-set", default="sc_test", help="Instance set to use for the secondary comparison table")
+    ap.add_argument("--wtl-set", default="all", help="Instance set to use for the W/T/L table")
+    ap.add_argument("--accuracy", type=Path, default=None, help="Optional branching accuracy CSV")
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -212,6 +303,18 @@ def main():
     out2 = args.out / "table_ablations.tex"
     out2.write_text(abl_tex)
     print(f"  Written: {out2}")
+
+    wtl_tex = build_wtl_table(df, iset=args.wtl_set)
+    out3 = args.out / "table_wtl.tex"
+    out3.write_text(wtl_tex)
+    print(f"  Written: {out3}")
+
+    if args.accuracy and args.accuracy.exists():
+        acc_df = pd.read_csv(args.accuracy)
+        acc_tex = build_accuracy_table(acc_df)
+        out4 = args.out / "table_branching_accuracy.tex"
+        out4.write_text(acc_tex)
+        print(f"  Written: {out4}")
 
     print("Done.")
 

@@ -181,6 +181,21 @@ Runs the supported methods on test sets and writes one JSON result per run:
 - `bbml-gnn-graph-fp32`
 - `bbml-gnn-graph-fp16`
 
+Optional graph-model ablations:
+
+```bash
+bash benchmarks/pipeline/05_run.sh --include-ablations
+```
+
+This appends:
+
+- `pure-imitation` (`alpha=1.0`)
+- `alpha-fixed-0.5`
+- `solver-only-alpha0`
+- `no-temperature`
+- `no-cond-gate`
+- `no-conf-gate`
+
 Output layout:
 
 - results: `$RESULTS_DIR/runs/{solver}/{instance_id}_s{seed}.json`
@@ -195,12 +210,22 @@ python benchmarks/eval/kpis.py \
 
 python benchmarks/eval/summary_table.py \
   --kpis $RESULTS_DIR/kpis.csv \
+  --accuracy $RESULTS_DIR/branching_accuracy.csv \
   --out $RESULTS_DIR/eval/tables
+
+python benchmarks/eval/branching_accuracy.py \
+  --name bbml-gnn-graph \
+  --ckpt "$RESULTS_DIR/models/bbml_gnn_graph_member0.pt,$RESULTS_DIR/models/bbml_gnn_graph_member1.pt,$RESULTS_DIR/models/bbml_gnn_graph_member2.pt" \
+  --parquet "$DATA_DIR/parquet/val.parquet" \
+  --graph-manifest "$DATA_DIR/manifests/graph/val.txt" \
+  --out "$RESULTS_DIR/branching_accuracy.csv"
 
 python benchmarks/eval/perf_profile.py \
   --results $RESULTS_DIR/runs \
   --out $RESULTS_DIR/eval/figures
 ```
+
+`kpis.py` now also reports wins / ties / losses vs. the chosen baseline in addition to SGM, solved percentage, and Wilcoxon significance.
 
 **Step 7 — compile paper**
 ```bash
@@ -234,6 +259,7 @@ bash benchmarks/pipeline/run_all.sh --skip-generate --skip-collect --skip-train
 | `bbml/alpha/min` | 0.1 | Minimum ML blend weight |
 | `bbml/alpha/depth_penalty` | 0.02 | α decay per tree level |
 | `bbml/alpha/theta` | 0.5 | Confidence midpoint for the sigmoid α gate |
+| `bbml/alpha/use_confidence_gate` | true | Disable only for ablations that want depth-only alpha |
 | `bbml/confidence` | 0.5 | Fallback confidence when runtime uncertainty is unavailable |
 | `bbml/temperature` | 1.0 | Score scaling (1/T applied before blending) |
 | `bbml/numerics/cond_threshold` | 1e8 | Condition threshold for gating ML when the current LP reports `cond_est` |

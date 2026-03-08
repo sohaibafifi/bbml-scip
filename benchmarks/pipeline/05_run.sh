@@ -16,13 +16,24 @@ RUN_JOBS="${RUN_JOBS:-$(bbml_default_solver_jobs)}"
 
 METHODS="${BENCH_METHODS:-scip-default,strong-branch,bbml-mlp,bbml-gnn-varonly,bbml-gnn-graph,bbml-gnn-graph-fp32,bbml-gnn-graph-fp16}"
 INSTANCE_SET_FILTER=""
+INCLUDE_ABLATIONS="${BENCH_INCLUDE_ABLATIONS:-0}"
+ABLATION_METHODS="pure-imitation,alpha-fixed-0.5,solver-only-alpha0,no-temperature,no-cond-gate,no-conf-gate"
 
 for arg in "$@"; do
   case $arg in
     --set=*) INSTANCE_SET_FILTER="${arg#*=}" ;;
     --methods=*) METHODS="${arg#*=}" ;;
+    --include-ablations) INCLUDE_ABLATIONS=1 ;;
   esac
 done
+
+if [ "$INCLUDE_ABLATIONS" = "1" ]; then
+  if [ -n "$METHODS" ]; then
+    METHODS="$METHODS,$ABLATION_METHODS"
+  else
+    METHODS="$ABLATION_METHODS"
+  fi
+fi
 
 RUNS_DIR="$RESULTS_DIR/runs"
 SCIP_LOG_DIR="$RESULTS_DIR/scip_logs"
@@ -144,6 +155,41 @@ method_specs = {
         "model": str(model_dir / "bbml_gnn_graph_fp16.onnx"),
         "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
     },
+    "pure-imitation": {
+        "model": graph_ensemble_model,
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+        "alpha_min": 1.0,
+        "alpha_max": 1.0,
+        "depth_penalty": 0.0,
+    },
+    "alpha-fixed-0.5": {
+        "model": graph_ensemble_model,
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+        "alpha_min": 0.5,
+        "alpha_max": 0.5,
+        "depth_penalty": 0.0,
+    },
+    "solver-only-alpha0": {
+        "model": graph_ensemble_model,
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+        "alpha_min": 0.0,
+        "alpha_max": 0.0,
+        "depth_penalty": 0.0,
+    },
+    "no-temperature": {
+        "model": graph_ensemble_model,
+        "temperature": 1.0,
+    },
+    "no-cond-gate": {
+        "model": graph_ensemble_model,
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+        "cond_threshold": 1.0e20,
+    },
+    "no-conf-gate": {
+        "model": graph_ensemble_model,
+        "temperature_file": str(model_dir / "bbml_gnn_graph.temperature.txt"),
+        "disable_confidence_gate": True,
+    },
 }
 
 with manifest.open("w") as fh:
@@ -186,6 +232,22 @@ with manifest.open("w") as fh:
                         cmd += ["--model", str(spec["model"])]
                     if spec.get("temperature_file"):
                         cmd += ["--temperature-file", str(spec["temperature_file"])]
+                    if spec.get("temperature") is not None:
+                        cmd += ["--temperature", str(spec["temperature"])]
+                    if spec.get("alpha_min") is not None:
+                        cmd += ["--alpha-min", str(spec["alpha_min"])]
+                    if spec.get("alpha_max") is not None:
+                        cmd += ["--alpha-max", str(spec["alpha_max"])]
+                    if spec.get("depth_penalty") is not None:
+                        cmd += ["--depth-penalty", str(spec["depth_penalty"])]
+                    if spec.get("alpha_theta") is not None:
+                        cmd += ["--alpha-theta", str(spec["alpha_theta"])]
+                    if spec.get("confidence") is not None:
+                        cmd += ["--confidence", str(spec["confidence"])]
+                    if spec.get("cond_threshold") is not None:
+                        cmd += ["--cond-threshold", str(spec["cond_threshold"])]
+                    if spec.get("disable_confidence_gate"):
+                        cmd.append("--disable-confidence-gate")
                     fh.write(
                         json.dumps(
                             {
