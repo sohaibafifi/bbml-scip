@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, Optional, Sequence, Set
 
@@ -7,13 +8,36 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
+def _diagnose_json_error(path: Path, original: Exception) -> Exception:
+    try:
+        with path.open() as fh:
+            for lineno, line in enumerate(fh, start=1):
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except json.JSONDecodeError as err:
+                    raise ValueError(f"invalid NDJSON in {path} at line {lineno}: {err.msg}") from original
+                if not isinstance(record, dict):
+                    raise ValueError(f"invalid NDJSON in {path} at line {lineno}: expected object, got {type(record).__name__}") from original
+    except ValueError:
+        raise
+    except Exception:
+        pass
+    raise ValueError(f"failed to parse {path}: {original}") from original
+
+
 def _iter_json_chunks(paths: Sequence[Path], chunksize: int) -> Iterator[pd.DataFrame]:
     for path in paths:
         if not path.exists():
             raise FileNotFoundError(f"NDJSON not found: {path}")
         if path.stat().st_size == 0:
             continue
-        yield from pd.read_json(str(path), lines=True, chunksize=chunksize)
+        try:
+            yield from pd.read_json(str(path), lines=True, chunksize=chunksize)
+        except ValueError as err:
+            raise _diagnose_json_error(path, err)
 
 
 def _read_manifest(path: Path) -> list[Path]:
