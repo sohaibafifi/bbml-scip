@@ -119,6 +119,17 @@ def instance_id(path: Path) -> str:
             name = name[: -len(suffix)]
     return name
 
+def resolve_instance(raw: str, instance_set: str, root: Path) -> Path:
+    inst_path = Path(raw).expanduser()
+    if inst_path.exists():
+        return inst_path.resolve()
+    family, split = instance_set.rsplit("_", 1)
+    data_dir = Path(os.environ.get("DATA_DIR", str(root / "data")))
+    fallback = data_dir / "instances" / family / split / inst_path.name
+    if fallback.exists():
+        return fallback.resolve()
+    return inst_path
+
 py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
 root = Path(os.environ["BBML_ROOT"])
 results_dir = Path(os.environ["RESULTS_DIR"])
@@ -204,7 +215,8 @@ with manifest.open("w") as fh:
             inst = line.strip()
             if not inst:
                 continue
-            iid = instance_id(Path(inst))
+            inst_path = resolve_instance(inst, instance_set, root)
+            iid = instance_id(inst_path)
             for method in methods:
                 spec = method_specs.get(method)
                 if spec is None:
@@ -217,7 +229,7 @@ with manifest.open("w") as fh:
                         "--runner-bin",
                         runner_bin,
                         "--instance",
-                        inst,
+                        str(inst_path),
                         "--solver",
                         method,
                         "--seed",

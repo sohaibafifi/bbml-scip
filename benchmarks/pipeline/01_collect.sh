@@ -103,6 +103,15 @@ def completed_log(path: Path) -> bool:
         return False
     return "BBML_SUMMARY" in text
 
+def resolve_instance(raw: str, family: str, split: str, data_dir: Path) -> Path:
+    inst_path = Path(raw).expanduser()
+    if inst_path.exists():
+        return inst_path.resolve()
+    fallback = data_dir / "instances" / family / split / inst_path.name
+    if fallback.exists():
+        return fallback.resolve()
+    return inst_path
+
 family = os.environ["FAMILY"]
 split = os.environ["SPLIT"]
 list_file = Path(os.environ["LIST_FILE"])
@@ -131,7 +140,7 @@ with list_file.open() as src, manifest.open("a") as out:
         inst = line.strip()
         if not inst:
             continue
-        inst_path = Path(inst)
+        inst_path = resolve_instance(inst, family, split, data_dir)
         iid = instance_id(inst_path)
         for seed in seeds:
             total += 1
@@ -163,10 +172,10 @@ with list_file.open() as src, manifest.open("a") as out:
                 + [
                     script,
                     "--runner-bin",
-                    runner_bin,
-                    "--instance",
-                    inst,
-                    "--seed",
+                        runner_bin,
+                        "--instance",
+                        str(inst_path),
+                        "--seed",
                     seed,
                     "--time-limit",
                     time_limit,
