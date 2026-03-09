@@ -218,7 +218,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
       && tlogsb
       && SCIPgetLPSolstat(scip) == SCIP_LPSOLSTAT_OPTIMAL
       && SCIPallColsInLP(scip)
-      && !SCIPsolveIsStopped(scip)) {
+      && !SCIPisStopped(scip)) {
     sb_up.resize(nc, 0.0);
     sb_down.resize(nc, 0.0);
     std::vector<SCIP_Real> downvals(static_cast<size_t>(nc), 0.0);
