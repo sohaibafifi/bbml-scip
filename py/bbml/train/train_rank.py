@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -37,6 +38,10 @@ GRAPH_VAR_FEATS = [
 ]
 
 
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
 @dataclass
 class NodeGroup:
     X: torch.Tensor  # [m, d]
@@ -53,6 +58,7 @@ class NodeDataset(Dataset):
     def __init__(self, parquet_path: str, feature_cols: Optional[List[str]] = None):
         if not os.path.exists(parquet_path):
             raise FileNotFoundError(f"Parquet not found: {parquet_path}")
+        _log(f"[data] loading parquet candidates from {parquet_path}")
         self.df = pd.read_parquet(parquet_path)
         self.feature_cols = feature_cols or DEFAULT_FEATS
         missing = [c for c in self.feature_cols + ["node_id"] if c not in self.df.columns]
@@ -63,6 +69,7 @@ class NodeDataset(Dataset):
         # Precompute group indices
         self.groups: List[NodeGroup] = []
         self._build_groups()
+        _log(f"[data] loaded {len(self.df)} candidate rows into {len(self.groups)} node groups " f"(strongbranch_targets={'yes' if self.has_sb else 'no'})")
 
     def _build_groups(self):
         df = self.df
@@ -337,10 +344,12 @@ def train_epoch_gnn(
 
 class GraphJsonNodeDataset(Dataset):
     def __init__(self, ndjson_path: Optional[str] = None, manifest_path: Optional[str] = None):
+        t0 = time.time()
         self.paths = self._resolve_paths(ndjson_path, manifest_path)
+        _log(f"[data] indexing graph telemetry from {len(self.paths)} file(s)")
         # Build byte offsets for each line to support random access without loading all
         self._offsets: List[tuple[str, int]] = []
-        for path in self.paths:
+        for idx, path in enumerate(self.paths, start=1):
             with open(path, "rb") as f:
                 off = 0
                 for line in f:
@@ -348,6 +357,8 @@ class GraphJsonNodeDataset(Dataset):
                     if ln > 1:
                         self._offsets.append((path, off))
                     off += ln
+            if idx == len(self.paths) or idx % 50 == 0:
+                _log(f"[data] indexed {idx}/{len(self.paths)} files ({len(self._offsets)} graph nodes)")
         # Peek first line to infer dims
         self.d_var = 0
         self.d_con = 0
@@ -355,6 +366,7 @@ class GraphJsonNodeDataset(Dataset):
             g0 = self._read_item(0)
             self.d_var = int(g0.var_feat.size(1))
             self.d_con = int(g0.con_feat.size(1)) if g0.con_feat is not None else 0
+        _log(f"[data] graph dataset ready: {len(self._offsets)} node groups, " f"d_var={self.d_var}, d_con={self.d_con}, took {time.time() - t0:.1f}s")
 
     @staticmethod
     def _resolve_paths(ndjson_path: Optional[str], manifest_path: Optional[str]) -> List[str]:
@@ -450,6 +462,7 @@ def main():
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
+    _log(f"[train] seed={args.seed}")
 
     # Track model config for checkpoint metadata
     model_cfg: Dict[str, Any]
@@ -464,6 +477,7 @@ def main():
                 seed=args.seed,
             )
             d_in = args.d
+            _log(f"[data] using synthetic MLP dataset with {len(ds)} node groups and d_in={d_in}")
         else:
             ds = NodeDataset(args.parquet, feature_cols=DEFAULT_FEATS)
             d_in = len(DEFAULT_FEATS)
@@ -487,6 +501,7 @@ def main():
             )
             d_var, d_con = ds_g.d_var, ds_g.d_con
             layers_used, graph_inputs = 3, True
+            _log(f"[data] using graph telemetry dataset with {len(ds_g)} node groups " f"(batch_size={args.batch_size})")
             model = GraphRanker(
                 d_var=d_var,
                 d_con=max(1, d_con),
@@ -503,6 +518,7 @@ def main():
                 collate_fn=collate_graph_groups,
             )
             d_var, d_con, layers_used, graph_inputs = args.d, args.d, 3, True
+            _log(f"[data] using synthetic GNN dataset with {len(ds_g)} node groups")
             model = GraphRanker(
                 d_var=d_var,
                 d_con=d_con,
@@ -520,6 +536,7 @@ def main():
                 1,
                 False,
             )
+            _log(f"[data] using var-only GNN dataset with {len(ds)} node groups " f"(batch_size={args.batch_size})")
             model = GraphRanker(
                 d_var=d_var,
                 d_con=d_con,
@@ -540,6 +557,7 @@ def main():
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
+    _log(f"[train] model={model_cfg['model']} device={device} hidden={args.hidden} dropout={args.dropout}")
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
@@ -548,13 +566,14 @@ def main():
     best_value = -float("inf") if select_higher else float("inf")
     best_epoch = 0
     ckpt_best_path = args.ckpt_best or args.ckpt
+    _log(f"[train] starting optimization for {args.epochs} epoch(s)")
 
     for epoch in range(1, args.epochs + 1):
         if args.model == "mlp":
             loss, acc = train_epoch(model, loader, optim, device=device)
         else:
             loss, acc = train_epoch_gnn(model, loader, optim, device=device)
-        print(f"[epoch {epoch:03d}] loss={loss:.4f} acc@1={acc:.3f}")
+        _log(f"[epoch {epoch:03d}] loss={loss:.4f} acc@1={acc:.3f}")
         # Check for improvement and save best
         val = acc if select_higher else loss
         improved = val > best_value if select_higher else val < best_value
@@ -565,7 +584,7 @@ def main():
                 {"model": model_cfg["model"], "cfg": model_cfg, "state_dict": model.state_dict()},
                 ckpt_best_path,
             )
-            print(f"Saved new best model to {ckpt_best_path} " f"(epoch {epoch}, {args.metric}={val:.4f})")
+            _log(f"Saved new best model to {ckpt_best_path} (epoch {epoch}, {args.metric}={val:.4f})")
     # Note: no final 'last' checkpoint; we keep the best per user's request
     if best_epoch == 0 and ckpt_best_path:
         # Edge case: zero epochs or no improvement criterion triggered
@@ -573,7 +592,7 @@ def main():
             {"model": model_cfg["model"], "cfg": model_cfg, "state_dict": model.state_dict()},
             ckpt_best_path,
         )
-        print(f"Saved model checkpoint to {ckpt_best_path}")
+        _log(f"Saved model checkpoint to {ckpt_best_path}")
     # quick sanity: on synthetic, expect >0.8 acc@1 within a few epochs
 
 
