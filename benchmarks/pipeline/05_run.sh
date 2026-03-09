@@ -16,6 +16,7 @@ MODEL_DIR="$RESULTS_DIR/models"
 TL="${BENCH_TL:-3600}"
 SEEDS="${BENCH_SEEDS:-0 1 2 3 4}"
 RUN_JOBS="${RUN_JOBS:-$(bbml_default_solver_jobs)}"
+RUN_FORCE="${RUN_FORCE:-0}"
 
 METHODS="${BENCH_METHODS:-scip-default,strong-branch,bbml-mlp,bbml-gnn-varonly,bbml-gnn-graph,bbml-gnn-graph-fp32,bbml-gnn-graph-fp16}"
 INSTANCE_SET_FILTER=""
@@ -90,6 +91,7 @@ echo "  Methods       : $METHODS"
 echo "  Seeds         : $SEEDS"
 echo "  Time limit    : ${TL}s"
 echo "  Run jobs      : $RUN_JOBS"
+echo "  Resume mode   : $( [ "$RUN_FORCE" = "1" ] && echo off || echo on )"
 echo "  Runner        : $BBML_RUNNER_BIN"
 echo ""
 
@@ -105,6 +107,7 @@ INSTANCE_SETS="$(IFS=,; echo "${INSTANCE_SETS[*]}")" \
 SCRIPT="$SCRIPT_DIR/run_benchmark_task.py" \
 TASK_LOG_DIR="$TASK_LOG_DIR" \
 MANIFEST="$manifest" \
+RUN_FORCE="$RUN_FORCE" \
 python3 - <<'PY'
 import json
 import os
@@ -130,6 +133,32 @@ def resolve_instance(raw: str, instance_set: str, root: Path) -> Path:
         return fallback.resolve()
     return inst_path
 
+
+def completed_log(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return False
+    return ("SCIP Status" in text) or ("BBML_SUMMARY" in text)
+
+
+def completed_result(path: Path, solver: str, seed: str) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        record.get("solver") == solver
+        and str(record.get("seed")) == seed
+        and isinstance(record.get("status"), str)
+        and "solve_time" in record
+        and "n_nodes" in record
+    )
+
 py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
 root = Path(os.environ["BBML_ROOT"])
 results_dir = Path(os.environ["RESULTS_DIR"])
@@ -142,6 +171,7 @@ instance_sets = [name for name in os.environ["INSTANCE_SETS"].split(",") if name
 script = os.environ["SCRIPT"]
 task_log_dir = Path(os.environ["TASK_LOG_DIR"])
 manifest = Path(os.environ["MANIFEST"])
+run_force = os.environ.get("RUN_FORCE", "0") == "1"
 
 graph_ensemble_paths = sorted(model_dir.glob("bbml_gnn_graph_member*.onnx"))
 graph_ensemble_model = ",".join(str(path) for path in graph_ensemble_paths) if graph_ensemble_paths else str(model_dir / "bbml_gnn_graph.onnx")
@@ -208,6 +238,9 @@ method_specs = {
 
 with manifest.open("w") as fh:
     for instance_set in instance_sets:
+        total = 0
+        runnable = 0
+        skipped = 0
         list_file = root / "benchmarks" / "instances" / f"{instance_set}.txt"
         if not list_file.exists():
             continue
@@ -222,8 +255,14 @@ with manifest.open("w") as fh:
                 if spec is None:
                     raise ValueError(f"Unsupported benchmark method: {method}")
                 for seed in seeds:
+                    total += 1
                     result_out = results_dir / "runs" / method / f"{iid}_s{seed}.json"
                     scip_log = results_dir / "scip_logs" / method / f"{iid}_s{seed}.log"
+                    skip = (not run_force) and completed_result(result_out, method, seed) and completed_log(scip_log)
+                    if skip:
+                        skipped += 1
+                    else:
+                        runnable += 1
                     cmd = py_launch + [
                         script,
                         "--runner-bin",
@@ -270,11 +309,14 @@ with manifest.open("w") as fh:
                                 "cmd": cmd,
                                 "cwd": os.getcwd(),
                                 "log_path": str(task_log_dir / f"{instance_set}_{method}_{iid}_s{seed}.log"),
-                                "skip": result_out.is_file() and result_out.stat().st_size > 0,
+                                "skip": skip,
                             }
                         )
                         + "\n"
                     )
+        print(f"--- {instance_set} ---")
+        print(f"  queued total={total} runnable={runnable} skipped={skipped}")
+        print()
 PY
 
 "${PYTHON_CMD[@]}" "$SCRIPT_DIR/task_runner.py" --manifest "$manifest" --jobs "$RUN_JOBS"

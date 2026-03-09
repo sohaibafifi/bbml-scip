@@ -21,6 +21,28 @@ def _instance_id(path: str) -> str:
     return name
 
 
+def _log_looks_complete(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return False
+    return ("SCIP Status" in text) or ("BBML_SUMMARY" in text)
+
+
+def _record_looks_complete(path: Path, solver: str, seed: int) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    if record.get("solver") != solver or int(record.get("seed", -1)) != seed:
+        return False
+    return isinstance(record.get("status"), str) and record.get("status") != "" and "solve_time" in record and "n_nodes" in record
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run one SCIP benchmark task and persist a JSON result.")
     ap.add_argument("--runner-bin", required=True)
@@ -48,7 +70,11 @@ def main() -> int:
     result_out.parent.mkdir(parents=True, exist_ok=True)
     scip_log.parent.mkdir(parents=True, exist_ok=True)
 
+    if _record_looks_complete(result_out, args.solver, args.seed) and _log_looks_complete(scip_log):
+        return 0
+
     set_path = ""
+    tmp_log_path = None
     with tempfile.NamedTemporaryFile("w", suffix=".set", delete=False) as tmp:
         tmp.write(f"limits/time = {args.time_limit}\n")
         tmp.write(f"randomization/randomseedshift = {args.seed}\n")
@@ -86,7 +112,9 @@ def main() -> int:
 
     cmd = [args.runner_bin, "--problem", args.instance, "--set", set_path]
     try:
-        with scip_log.open("w") as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as tmp_log:
+            tmp_log_path = Path(tmp_log.name)
+        with tmp_log_path.open("w") as fh:
             proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, text=True, check=False)
     finally:
         if set_path:
@@ -94,6 +122,9 @@ def main() -> int:
                 os.unlink(set_path)
             except OSError:
                 pass
+    if tmp_log_path is None:
+        return 1
+    tmp_log_path.replace(scip_log)
     record = parse_log(scip_log)
     record.update(
         {
@@ -102,8 +133,18 @@ def main() -> int:
             "seed": args.seed,
         }
     )
-    result_out.write_text(json.dumps(record) + "\n")
-    return int(proc.returncode)
+    if proc.returncode == 0 and _log_looks_complete(scip_log):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, dir=result_out.parent) as tmp_result:
+            tmp_result.write(json.dumps(record) + "\n")
+            tmp_result_path = Path(tmp_result.name)
+        tmp_result_path.replace(result_out)
+        return 0
+    try:
+        if result_out.exists():
+            result_out.unlink()
+    except OSError:
+        pass
+    return int(proc.returncode) or 1
 
 
 if __name__ == "__main__":
