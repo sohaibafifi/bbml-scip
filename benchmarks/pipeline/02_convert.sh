@@ -25,6 +25,22 @@ if [ -z "$PY_LAUNCH_JSON" ]; then
   exit 1
 fi
 
+if ! CONVERTER_CHECK="$("${PYTHON_CMD[@]}" - <<'PY' 2>&1
+import importlib.util
+
+missing = [name for name in ("pandas", "pyarrow") if importlib.util.find_spec(name) is None]
+if missing:
+    raise SystemExit("missing Python modules: " + ", ".join(missing))
+print("ok")
+PY
+)"; then
+  echo "ERROR: telemetry conversion requires pandas and pyarrow in the resolved Python environment." >&2
+  echo "Resolved launcher: ${PYTHON_CMD[*]}" >&2
+  printf '%s\n' "$CONVERTER_CHECK" >&2
+  echo "Set BBML_PYTHON to a Python with the project deps installed, or install them into py/.venv." >&2
+  exit 1
+fi
+
 IFS=',' read -ra SPLIT_LIST <<< "$CONVERT_SPLITS"
 
 families=()
