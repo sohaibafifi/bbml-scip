@@ -1,5 +1,7 @@
+import json
+
 import pandas as pd
-from bbml.train.train_rank import NodeDataset, DEFAULT_FEATS
+from bbml.train.train_rank import NodeDataset, GraphJsonNodeDataset, DEFAULT_FEATS
 
 
 def test_node_dataset_grouping(tmp_path):
@@ -32,3 +34,54 @@ def test_node_dataset_grouping(tmp_path):
     # Should infer chosen index from column
     for grp in ds:
         assert grp.chosen == 1
+
+
+def test_node_dataset_falls_back_when_sb_targets_are_nan(tmp_path):
+    rows = []
+    for vid in range(3):
+        rows.append(
+            {
+                "node_id": 1,
+                "var_id": vid,
+                "obj": 0.0,
+                "reduced_cost": float(vid),
+                "fracval": 0.5,
+                "domain_width": 1.0,
+                "is_binary": 1,
+                "is_integer": 1,
+                "pseudocost_up": float(vid + 1),
+                "pseudocost_down": float(vid + 2),
+                "pc_obs_up": float(vid + 3),
+                "pc_obs_down": float(vid + 4),
+                "chosen_idx": 2,
+                "sb_score_up": float("nan"),
+                "sb_score_down": float("nan"),
+            }
+        )
+    path = tmp_path / "bad_targets.parquet"
+    pd.DataFrame(rows).to_parquet(path, index=False)
+    ds = NodeDataset(str(path), feature_cols=DEFAULT_FEATS)
+    grp = ds[0]
+    assert grp.y_true is None
+    assert grp.chosen == 2
+
+
+def test_graph_json_dataset_reuses_offset_cache(tmp_path):
+    graph_path = tmp_path / "graph.ndjson"
+    line = {
+        "var_feat": [[0.1] * 9, [0.2] * 9],
+        "con_feat": [[0.0] * 4],
+        "edge_index": [[0, 0], [0, 1]],
+        "sb_score_up": [1.0, 2.0],
+        "sb_score_down": [1.5, 1.0],
+        "chosen_idx": 1,
+    }
+    graph_path.write_text(json.dumps(line) + "\n")
+    ds = GraphJsonNodeDataset(ndjson_path=str(graph_path))
+    assert len(ds) == 1
+    cache_path = graph_path.with_suffix(".ndjson.offsets.pt")
+    assert cache_path.exists()
+    ds_cached = GraphJsonNodeDataset(ndjson_path=str(graph_path))
+    assert len(ds_cached) == 1
+    assert ds_cached.d_var == 9
+    assert ds_cached.d_con == 4

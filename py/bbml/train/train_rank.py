@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+import numpy as np
 import pandas as pd
 from bbml.models.graph_ranker import GraphRanker
 
@@ -40,6 +41,32 @@ GRAPH_VAR_FEATS = [
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _safe_numeric_frame(df: pd.DataFrame) -> np.ndarray:
+    arr = df.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32, copy=True)
+    return _safe_numeric_array(arr)
+
+
+def _safe_numeric_array(arr: np.ndarray) -> np.ndarray:
+    arr = np.asarray(arr, dtype=np.float32)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=1e6, neginf=-1e6)
+    arr = np.where(np.abs(arr) > 1e8, 0.0, arr)
+    return np.clip(arr, -1e6, 1e6)
+
+
+def _compress_target_scores(values: np.ndarray) -> Optional[torch.Tensor]:
+    arr = np.asarray(values, dtype=np.float32)
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return None
+    if not finite.all():
+        floor = float(np.min(arr[finite]) - 1.0)
+        arr = np.where(finite, arr, floor)
+    arr = arr - float(np.min(arr))
+    arr = np.log1p(arr)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=20.0, neginf=0.0)
+    return torch.tensor(arr, dtype=torch.float32)
 
 
 @dataclass
@@ -80,24 +107,25 @@ class NodeDataset(Dataset):
             chosen_by_node = df.groupby("node_id")["chosen_idx"].first().to_dict()
         # Build groups
         for node_id, g in df.groupby("node_id"):
-            X = torch.tensor(g[self.feature_cols].astype(float).values, dtype=torch.float32)
+            X = torch.tensor(_safe_numeric_frame(g[self.feature_cols]), dtype=torch.float32)
             y_true = None
             chosen = None
             if self.has_sb:
                 # Prefer a single score column if available, else combine up/down
                 if "sb_score" in g.columns:
-                    y_true = torch.tensor(g["sb_score"].astype(float).values, dtype=torch.float32)
+                    y_true = _compress_target_scores(g["sb_score"].values)
                 else:
                     # Use max of up/down child bound improvements as proxy target
-                    up = g["sb_score_up"].astype(float).values
+                    up = pd.to_numeric(g["sb_score_up"], errors="coerce").values
                     if "sb_score_down" in g.columns:
-                        down = g["sb_score_down"].astype(float).values
-                        tgt = torch.tensor([max(u, d) for u, d in zip(up, down)], dtype=torch.float32)
+                        down = pd.to_numeric(g["sb_score_down"], errors="coerce").values
+                        tgt = np.maximum(up, down)
                     else:
-                        tgt = torch.tensor(up, dtype=torch.float32)
-                    y_true = tgt
+                        tgt = up
+                    y_true = _compress_target_scores(tgt)
                 # If chosen is missing, derive from y_true
-                chosen = int(torch.argmax(y_true).item())
+                if y_true is not None:
+                    chosen = int(torch.argmax(y_true).item())
             else:
                 # Fall back to a provided chosen index or a heuristic
                 if node_id in chosen_by_node:
@@ -110,6 +138,13 @@ class NodeDataset(Dataset):
                     chosen = int(torch.argmax(torch.maximum(up, down)).item())
                 else:
                     # Last-resort heuristic: pick argmax reduced_cost magnitude.
+                    chosen = int(torch.argmax(torch.abs(X[:, self.feature_cols.index("reduced_cost")])).item())
+            if y_true is None:
+                if node_id in chosen_by_node:
+                    chosen = int(chosen_by_node[node_id])
+                elif "chosen" in g.columns:
+                    chosen = int(g["chosen"].astype(int).iloc[0])
+                elif chosen is None:
                     chosen = int(torch.argmax(torch.abs(X[:, self.feature_cols.index("reduced_cost")])).item())
             self.groups.append(NodeGroup(X=X, y_true=y_true, chosen=chosen))
 
@@ -346,26 +381,30 @@ class GraphJsonNodeDataset(Dataset):
     def __init__(self, ndjson_path: Optional[str] = None, manifest_path: Optional[str] = None):
         t0 = time.time()
         self.paths = self._resolve_paths(ndjson_path, manifest_path)
-        _log(f"[data] indexing graph telemetry from {len(self.paths)} file(s)")
-        # Build byte offsets for each line to support random access without loading all
         self._offsets: List[tuple[str, int]] = []
-        for idx, path in enumerate(self.paths, start=1):
-            with open(path, "rb") as f:
-                off = 0
-                for line in f:
-                    ln = len(line)
-                    if ln > 1:
-                        self._offsets.append((path, off))
-                    off += ln
-            if idx == len(self.paths) or idx % 50 == 0:
-                _log(f"[data] indexed {idx}/{len(self.paths)} files ({len(self._offsets)} graph nodes)")
-        # Peek first line to infer dims
         self.d_var = 0
         self.d_con = 0
-        if len(self._offsets) > 0:
-            g0 = self._read_item(0)
-            self.d_var = int(g0.var_feat.size(1))
-            self.d_con = int(g0.con_feat.size(1)) if g0.con_feat is not None else 0
+        cache_path = self._cache_path(ndjson_path, manifest_path)
+        if cache_path and self._load_cache(cache_path):
+            _log(f"[data] loaded cached graph index from {cache_path}")
+        else:
+            _log(f"[data] indexing graph telemetry from {len(self.paths)} file(s)")
+            for idx, path in enumerate(self.paths, start=1):
+                with open(path, "rb") as f:
+                    off = 0
+                    for line in f:
+                        ln = len(line)
+                        if ln > 1:
+                            self._offsets.append((path, off))
+                        off += ln
+                if idx == len(self.paths) or idx % 50 == 0:
+                    _log(f"[data] indexed {idx}/{len(self.paths)} files ({len(self._offsets)} graph nodes)")
+            if len(self._offsets) > 0:
+                g0 = self._read_item(0)
+                self.d_var = int(g0.var_feat.size(1))
+                self.d_con = int(g0.con_feat.size(1)) if g0.con_feat is not None else 0
+            if cache_path:
+                self._save_cache(cache_path)
         _log(f"[data] graph dataset ready: {len(self._offsets)} node groups, " f"d_var={self.d_var}, d_con={self.d_con}, took {time.time() - t0:.1f}s")
 
     @staticmethod
@@ -390,6 +429,43 @@ class GraphJsonNodeDataset(Dataset):
             raise ValueError("expected --graph_ndjson or --graph_manifest")
         return paths
 
+    @staticmethod
+    def _cache_path(ndjson_path: Optional[str], manifest_path: Optional[str]) -> Optional[Path]:
+        if manifest_path:
+            return Path(manifest_path).with_suffix(Path(manifest_path).suffix + ".offsets.pt")
+        if ndjson_path:
+            return Path(ndjson_path).with_suffix(Path(ndjson_path).suffix + ".offsets.pt")
+        return None
+
+    def _path_signature(self) -> List[tuple[str, int, int]]:
+        return [(path, os.path.getsize(path), os.stat(path).st_mtime_ns) for path in self.paths]
+
+    def _load_cache(self, cache_path: Path) -> bool:
+        if not cache_path.exists():
+            return False
+        try:
+            payload = torch.load(cache_path, map_location="cpu")
+        except Exception:
+            return False
+        if payload.get("signature") != self._path_signature():
+            return False
+        self._offsets = [(str(path), int(off)) for path, off in payload.get("offsets", [])]
+        self.d_var = int(payload.get("d_var", 0))
+        self.d_con = int(payload.get("d_con", 0))
+        return True
+
+    def _save_cache(self, cache_path: Path) -> None:
+        payload = {
+            "signature": self._path_signature(),
+            "offsets": self._offsets,
+            "d_var": self.d_var,
+            "d_con": self.d_con,
+        }
+        try:
+            torch.save(payload, cache_path)
+        except Exception:
+            return
+
     def __len__(self) -> int:
         return len(self._offsets)
 
@@ -399,8 +475,8 @@ class GraphJsonNodeDataset(Dataset):
             f.seek(off)
             line = f.readline()
         obj = json.loads(line)
-        var_feat = torch.tensor(obj["var_feat"], dtype=torch.float32)
-        con_feat = torch.tensor(obj["con_feat"], dtype=torch.float32) if "con_feat" in obj else None
+        var_feat = torch.tensor(_safe_numeric_array(np.asarray(obj["var_feat"], dtype=np.float32)), dtype=torch.float32)
+        con_feat = torch.tensor(_safe_numeric_array(np.asarray(obj["con_feat"], dtype=np.float32)), dtype=torch.float32) if "con_feat" in obj else None
         ei = obj.get("edge_index", None)
         if ei is None:
             edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -409,13 +485,10 @@ class GraphJsonNodeDataset(Dataset):
         # Targets: prefer SB if present; else chosen only
         y_true = None
         if "sb_score_up" in obj or "sb_score_down" in obj:
-            up = obj.get("sb_score_up", [0.0] * var_feat.size(0))
-            down = obj.get("sb_score_down", None)
-            if down is None:
-                y = torch.tensor(up, dtype=torch.float32)
-            else:
-                y = torch.tensor([max(u, d) for u, d in zip(up, down)], dtype=torch.float32)
-            y_true = y
+            up = np.asarray(obj.get("sb_score_up", [0.0] * var_feat.size(0)), dtype=np.float32)
+            down = np.asarray(obj.get("sb_score_down", []), dtype=np.float32) if "sb_score_down" in obj else None
+            tgt = up if down is None or down.size == 0 else np.maximum(up, down)
+            y_true = _compress_target_scores(tgt)
         chosen = int(obj.get("chosen_idx", 0))
         return GraphNodeGroup(var_feat=var_feat, con_feat=con_feat, edge_index=edge_index, y_true=y_true, chosen=chosen)
 
