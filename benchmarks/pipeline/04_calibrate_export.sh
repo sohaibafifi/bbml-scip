@@ -14,6 +14,7 @@ DATA_DIR="${DATA_DIR:-$BBML_ROOT/data}"
 RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"
 MODEL_DIR="$RESULTS_DIR/models"
 EXPORT_JOBS="${EXPORT_JOBS:-2}"
+CALIBRATE_DEVICE="${CALIBRATE_DEVICE:-$(bbml_detect_torch_device)}"
 VAL_PARQUET="$DATA_DIR/parquet/val.parquet"
 GRAPH_VAL_MANIFEST="$DATA_DIR/manifests/graph/val.txt"
 
@@ -43,6 +44,7 @@ fi
 
 echo "=== Calibration and export ==="
 echo "  Export jobs : $EXPORT_JOBS"
+echo "  Device      : $CALIBRATE_DEVICE"
 echo ""
 
 echo "[1/3] Fitting checkpoint-aware temperatures..."
@@ -50,19 +52,19 @@ echo "[1/3] Fitting checkpoint-aware temperatures..."
   --ckpt "$GRAPH_ENSEMBLE_SPEC" \
   --parquet "$VAL_PARQUET" \
   --graph_manifest "$GRAPH_VAL_MANIFEST" \
-  --device cpu \
+  --device "$CALIBRATE_DEVICE" \
   --out "$MODEL_DIR/bbml_gnn_graph.temperature.txt"
 
 "${PYTHON_CMD[@]}" -m bbml.train.calibrate \
   --ckpt "$GNN_VARONLY_CKPT" \
   --parquet "$VAL_PARQUET" \
-  --device cpu \
+  --device "$CALIBRATE_DEVICE" \
   --out "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"
 
 "${PYTHON_CMD[@]}" -m bbml.train.calibrate \
   --ckpt "$MLP_CKPT" \
   --parquet "$VAL_PARQUET" \
-  --device cpu \
+  --device "$CALIBRATE_DEVICE" \
   --out "$MODEL_DIR/bbml_mlp.temperature.txt"
 
 export_manifest="$DATA_DIR/manifests/export_tasks.jsonl"

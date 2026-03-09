@@ -29,6 +29,7 @@ HIDDEN="${TRAIN_HIDDEN:-64}"
 DROPOUT="${TRAIN_DROPOUT:-0.1}"
 SEED="${TRAIN_SEED:-0}"
 ENSEMBLE_SIZE="${TRAIN_ENSEMBLE_SIZE:-3}"
+TRAIN_DEVICE="${TRAIN_DEVICE:-$(bbml_detect_torch_device)}"
 
 if [ "$ENSEMBLE_SIZE" -lt 1 ]; then
   echo "ERROR: TRAIN_ENSEMBLE_SIZE must be >= 1"
@@ -41,6 +42,7 @@ echo "  Batch size: $BATCH_SIZE"
 echo "  LR        : $LR"
 echo "  Hidden    : $HIDDEN"
 echo "  Dropout   : $DROPOUT"
+echo "  Device    : $TRAIN_DEVICE"
 echo "  Ensemble  : $ENSEMBLE_SIZE graph checkpoints"
 echo ""
 
@@ -60,6 +62,7 @@ for member_idx in $(seq 0 $((ENSEMBLE_SIZE - 1))); do
     --lr "$LR" \
     --hidden "$HIDDEN" \
     --dropout "$DROPOUT" \
+    --device "$TRAIN_DEVICE" \
     --seed "$member_seed" \
     --metric loss \
     --ckpt_best "$member_ckpt"
@@ -74,6 +77,7 @@ echo "[2/3] Training var-only GNN from aggregate parquet..."
   --lr "$LR" \
   --hidden "$HIDDEN" \
   --dropout "$DROPOUT" \
+  --device "$TRAIN_DEVICE" \
   --seed "$SEED" \
   --metric loss \
   --ckpt_best "$MODEL_DIR/bbml_gnn_varonly_best.pt"
@@ -87,6 +91,7 @@ echo "[3/3] Training MLP from aggregate parquet..."
   --lr "$LR" \
   --hidden "$HIDDEN" \
   --dropout "$DROPOUT" \
+  --device "$TRAIN_DEVICE" \
   --seed "$SEED" \
   --metric loss \
   --ckpt_best "$MODEL_DIR/bbml_mlp_best.pt"

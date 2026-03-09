@@ -428,6 +428,7 @@ def main():
     parser.add_argument("--graph_ndjson", type=str, default=None, help="Path to graph NDJSON logged by C++ (var_feat, con_feat, edge_index)")
     parser.add_argument("--graph_manifest", type=str, default=None, help="Manifest of graph NDJSON files, one path per line")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--synthetic_nodes", type=int, default=512)
     parser.add_argument("--d", type=int, default=len(DEFAULT_FEATS))
     parser.add_argument("--min_c", type=int, default=8)
@@ -535,7 +536,9 @@ def main():
             "dropout": args.dropout,
             "graph_inputs": graph_inputs,
         }
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = args.device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr)

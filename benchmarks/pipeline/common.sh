@@ -50,6 +50,26 @@ bbml_resolve_python() {
   PYTHON_CMD=(uv run --project "$BBML_ROOT/py" python)
 }
 
+bbml_detect_torch_device() {
+  local detected
+  detected="$("${PYTHON_CMD[@]}" - <<'PY' 2>/dev/null || true
+import importlib.util
+
+spec = importlib.util.find_spec("torch")
+if spec is None:
+    print("cpu")
+else:
+    import torch
+    print("cuda" if torch.cuda.is_available() else "cpu")
+PY
+)"
+  if [ -z "$detected" ]; then
+    echo "cpu"
+  else
+    echo "$detected"
+  fi
+}
+
 bbml_resolve_runner() {
   if [ -n "${BBML_RUNNER:-}" ] && [ -x "${BBML_RUNNER}" ]; then
     BBML_RUNNER_BIN="${BBML_RUNNER}"

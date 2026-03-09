@@ -164,7 +164,7 @@ def main():
     ap.add_argument("--graph_ndjson", type=str, default=None, help="Single graph NDJSON validation file")
     ap.add_argument("--graph_manifest", type=str, default=None, help="Manifest of graph NDJSON validation files")
     ap.add_argument("--batch_size", type=int, default=32)
-    ap.add_argument("--device", type=str, default="cpu")
+    ap.add_argument("--device", type=str, default="auto")
     ap.add_argument("--out", type=str, default=None, help="Optional file to write the fitted temperature into")
     args = ap.parse_args()
 
@@ -176,6 +176,9 @@ def main():
             raise FileNotFoundError(ckpt)
     if not Path(args.parquet).exists():
         raise FileNotFoundError(args.parquet)
+
+    if args.device == "auto":
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     models, cfg = _load_models(args.ckpt, args.device)
     if cfg.get("graph_inputs", False) and not (args.graph_ndjson or args.graph_manifest):
