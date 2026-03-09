@@ -41,6 +41,7 @@ def main() -> int:
     ap.add_argument("--candidate-out", required=True)
     ap.add_argument("--graph-out", required=True)
     ap.add_argument("--scip-log", required=True)
+    ap.add_argument("--telemetry-strongbranch", action="store_true")
     args = ap.parse_args()
 
     candidate_out = Path(args.candidate_out)
@@ -65,7 +66,7 @@ def main() -> int:
         tmp.write("bbml/telemetry = TRUE\n")
         tmp.write("bbml/telemetry/append = FALSE\n")
         tmp.write(f"bbml/telemetry/path = {_quote(str(candidate_tmp))}\n")
-        tmp.write("bbml/telemetry/strongbranch = TRUE\n")
+        tmp.write(f"bbml/telemetry/strongbranch = {'TRUE' if args.telemetry_strongbranch else 'FALSE'}\n")
         tmp.write("bbml/telemetry/graph = TRUE\n")
         tmp.write(f"bbml/telemetry/graph_path = {_quote(str(graph_tmp))}\n")
         set_path = tmp.name

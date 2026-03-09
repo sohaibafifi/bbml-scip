@@ -230,24 +230,28 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     std::vector<SCIP_Bool> downconflict(static_cast<size_t>(nc), FALSE);
     std::vector<SCIP_Bool> upconflict(static_cast<size_t>(nc), FALSE);
     SCIP_Bool lperr = FALSE;
-    SCIP_RETCODE sbrc = SCIPgetVarsStrongbranchesFrac(
-        scip,
-        cands,
-        nc,
-        -1,
-        downvals.data(),
-        upvals.data(),
-        downvalid.data(),
-        upvalid.data(),
-        downinf.data(),
-        upinf.data(),
-        downconflict.data(),
-        upconflict.data(),
-        &lperr);
-    if (sbrc == SCIP_OKAY && !lperr) {
-      for (int i = 0; i < nc; ++i) {
-        sb_down[static_cast<size_t>(i)] = static_cast<double>(downvals[static_cast<size_t>(i)]);
-        sb_up[static_cast<size_t>(i)] = static_cast<double>(upvals[static_cast<size_t>(i)]);
+    SCIP_RETCODE sbstart = SCIPstartStrongbranch(scip, FALSE);
+    if (sbstart == SCIP_OKAY) {
+      SCIP_RETCODE sbrc = SCIPgetVarsStrongbranchesFrac(
+          scip,
+          cands,
+          nc,
+          -1,
+          downvals.data(),
+          upvals.data(),
+          downvalid.data(),
+          upvalid.data(),
+          downinf.data(),
+          upinf.data(),
+          downconflict.data(),
+          upconflict.data(),
+          &lperr);
+      SCIP_RETCODE sbend = SCIPendStrongbranch(scip);
+      if (sbrc == SCIP_OKAY && sbend == SCIP_OKAY && !lperr) {
+        for (int i = 0; i < nc; ++i) {
+          sb_down[static_cast<size_t>(i)] = static_cast<double>(downvals[static_cast<size_t>(i)]);
+          sb_up[static_cast<size_t>(i)] = static_cast<double>(upvals[static_cast<size_t>(i)]);
+        }
       }
     }
   }
