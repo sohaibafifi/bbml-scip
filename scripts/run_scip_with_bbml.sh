@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eu
+if (set -o pipefail) 2>/dev/null; then
+  set -o pipefail
+fi
 
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <instance.lp> [extra name=value params...]" >&2
