@@ -50,16 +50,30 @@ bbml_default_train_jobs() {
   fi
 }
 
+bbml_export_repo_pythonpath() {
+  local repo_py
+  repo_py="$BBML_ROOT/py"
+  case ":${PYTHONPATH:-}:" in
+    *":$repo_py:"*) ;;
+    *)
+      if [ -n "${PYTHONPATH:-}" ]; then
+        export PYTHONPATH="$repo_py:$PYTHONPATH"
+      else
+        export PYTHONPATH="$repo_py"
+      fi
+      ;;
+  esac
+}
+
 bbml_resolve_python() {
   if [ -n "${BBML_PYTHON:-}" ]; then
     PYTHON_CMD=("$BBML_PYTHON")
-    return
-  fi
-  if [ -x "$BBML_ROOT/py/.venv/bin/python" ]; then
+  elif [ -x "$BBML_ROOT/py/.venv/bin/python" ]; then
     PYTHON_CMD=("$BBML_ROOT/py/.venv/bin/python")
-    return
+  else
+    PYTHON_CMD=(uv run --project "$BBML_ROOT/py" python)
   fi
-  PYTHON_CMD=(uv run --project "$BBML_ROOT/py" python)
+  bbml_export_repo_pythonpath
 }
 
 bbml_detect_torch_device() {
