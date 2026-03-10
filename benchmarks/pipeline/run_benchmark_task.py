@@ -43,6 +43,27 @@ def _record_looks_complete(path: Path, solver: str, seed: int) -> bool:
     return isinstance(record.get("status"), str) and record.get("status") != "" and "solve_time" in record and "n_nodes" in record
 
 
+def _load_complete_record(path: Path, solver: str, seed: int) -> dict[str, object] | None:
+    if not _record_looks_complete(path, solver, seed):
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _alpha_log_looks_complete(path: Path, record: dict[str, object] | None) -> bool:
+    if record is None:
+        return False
+    try:
+        n_nodes = int(record.get("n_nodes", 0))
+    except (TypeError, ValueError):
+        n_nodes = 0
+    if n_nodes <= 1:
+        return True
+    return path.is_file() and path.stat().st_size > 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run one SCIP benchmark task and persist a JSON result.")
     ap.add_argument("--runner-bin", required=True)
@@ -53,6 +74,9 @@ def main() -> int:
     ap.add_argument("--time-limit", required=True, type=int)
     ap.add_argument("--result-out", required=True)
     ap.add_argument("--scip-log", required=True)
+    ap.add_argument("--alpha-log-out", default="")
+    ap.add_argument("--root-cuts-only", action="store_true")
+    ap.add_argument("--disable-restarts", action="store_true")
     ap.add_argument("--model", default="")
     ap.add_argument("--temperature-file", default="")
     ap.add_argument("--disable-ml", action="store_true")
@@ -68,14 +92,25 @@ def main() -> int:
 
     result_out = Path(args.result_out)
     scip_log = Path(args.scip_log)
+    alpha_log_out = Path(args.alpha_log_out) if args.alpha_log_out else None
     result_out.parent.mkdir(parents=True, exist_ok=True)
     scip_log.parent.mkdir(parents=True, exist_ok=True)
+    if alpha_log_out is not None:
+        alpha_log_out.parent.mkdir(parents=True, exist_ok=True)
 
-    if _record_looks_complete(result_out, args.solver, args.seed) and _log_looks_complete(scip_log):
-        return 0
+    existing_record = _load_complete_record(result_out, args.solver, args.seed)
+    if existing_record is not None and _log_looks_complete(scip_log):
+        if alpha_log_out is None or _alpha_log_looks_complete(alpha_log_out, existing_record):
+            return 0
 
     set_path = ""
     tmp_log_path = None
+    tmp_alpha_path: Path | None = None
+    alpha_path_for_set = ""
+    if alpha_log_out is not None and not args.disable_ml:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as tmp_alpha:
+            tmp_alpha_path = Path(tmp_alpha.name)
+        alpha_path_for_set = str(tmp_alpha_path)
     with tempfile.NamedTemporaryFile("w", suffix=".set", delete=False) as tmp:
         tmp.write(f"limits/time = {args.time_limit}\n")
         tmp.write(f"randomization/randomseedshift = {args.seed}\n")
@@ -84,6 +119,9 @@ def main() -> int:
             tmp.write("bbml/enable = FALSE\n")
         else:
             tmp.write("bbml/enable = TRUE\n")
+            if alpha_path_for_set:
+                tmp.write("bbml/telemetry/alpha = TRUE\n")
+                tmp.write(f'bbml/telemetry/alpha_path = "{alpha_path_for_set}"\n')
             if args.model:
                 tmp.write(f'bbml/model_path = "{args.model}"\n')
             if args.temperature is not None:
@@ -94,6 +132,10 @@ def main() -> int:
                     tmp.write(f"bbml/temperature = {temperature}\n")
             if args.confidence is not None:
                 tmp.write(f"bbml/confidence = {args.confidence}\n")
+        if args.root_cuts_only:
+            tmp.write("separating/maxrounds = 0\n")
+        if args.disable_restarts:
+            tmp.write("presolving/maxrestarts = 0\n")
         if args.alpha_min is not None:
             tmp.write(f"bbml/alpha/min = {args.alpha_min}\n")
         if args.alpha_max is not None:
@@ -137,6 +179,14 @@ def main() -> int:
         }
     )
     if proc.returncode == 0 and _log_looks_complete(scip_log):
+        if alpha_log_out is not None:
+            try:
+                if tmp_alpha_path is not None and tmp_alpha_path.exists() and tmp_alpha_path.stat().st_size > 0:
+                    tmp_alpha_path.replace(alpha_log_out)
+                elif alpha_log_out.exists():
+                    alpha_log_out.unlink()
+            except OSError:
+                pass
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, dir=result_out.parent) as tmp_result:
             tmp_result.write(json.dumps(record) + "\n")
             tmp_result_path = Path(tmp_result.name)
@@ -145,6 +195,16 @@ def main() -> int:
     try:
         if result_out.exists():
             result_out.unlink()
+    except OSError:
+        pass
+    try:
+        if tmp_alpha_path is not None and tmp_alpha_path.exists():
+            tmp_alpha_path.unlink()
+    except OSError:
+        pass
+    try:
+        if alpha_log_out is not None and alpha_log_out.exists():
+            alpha_log_out.unlink()
     except OSError:
         pass
     return int(proc.returncode) or 1

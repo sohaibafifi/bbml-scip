@@ -11,7 +11,7 @@ BBML_ROOT="${BBML_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 bbml_resolve_python
 
 DATA_DIR="${DATA_DIR:-$BBML_ROOT/data}"
-INSTANCES_DIR="$BBML_ROOT/benchmarks/instances"
+INSTANCES_DIR="${INSTANCE_LIST_DIR:-$BBML_ROOT/benchmarks/instances}"
 LOG_DIR="$DATA_DIR/logs"
 PARQUET_DIR="$DATA_DIR/parquet"
 MANIFEST_DIR="$DATA_DIR/manifests"

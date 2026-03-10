@@ -12,7 +12,7 @@ bbml_resolve_python
 bbml_require_runner
 
 DATA_DIR="${DATA_DIR:-$BBML_ROOT/data}"
-INSTANCES_DIR="$BBML_ROOT/benchmarks/instances"
+INSTANCES_DIR="${INSTANCE_LIST_DIR:-$BBML_ROOT/benchmarks/instances}"
 
 SEEDS="${COLLECT_SEEDS:-0 1 2}"
 TL="${COLLECT_TL:-3600}"

@@ -13,19 +13,25 @@ bbml_require_runner
 
 RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"
 MODEL_DIR="$RESULTS_DIR/models"
+INSTANCES_DIR="${INSTANCE_LIST_DIR:-$BBML_ROOT/benchmarks/instances}"
 TL="${BENCH_TL:-3600}"
 SEEDS="${BENCH_SEEDS:-0 1 2 3 4}"
 RUN_JOBS="${RUN_JOBS:-$(bbml_default_solver_jobs)}"
 RUN_FORCE="${RUN_FORCE:-0}"
+ENABLE_ALPHA_LOG="${BENCH_ENABLE_ALPHA_LOG:-0}"
+ROOT_CUTS_ONLY="${BENCH_ROOT_CUTS_ONLY:-0}"
+DISABLE_RESTARTS="${BENCH_DISABLE_RESTARTS:-0}"
 
 METHODS="${BENCH_METHODS:-scip-default,strong-branch,bbml-mlp,bbml-gnn-varonly,bbml-gnn-graph,bbml-gnn-graph-fp32,bbml-gnn-graph-fp16}"
 INSTANCE_SET_FILTER=""
+INSTANCE_SET_LIST="${BENCH_INSTANCE_SETS:-}"
 INCLUDE_ABLATIONS="${BENCH_INCLUDE_ABLATIONS:-0}"
 ABLATION_METHODS="pure-imitation,alpha-fixed-0.5,solver-only-alpha0,no-temperature,no-cond-gate,no-conf-gate"
 
 for arg in "$@"; do
   case $arg in
     --set=*) INSTANCE_SET_FILTER="${arg#*=}" ;;
+    --sets=*) INSTANCE_SET_LIST="${arg#*=}" ;;
     --methods=*) METHODS="${arg#*=}" ;;
     --include-ablations) INCLUDE_ABLATIONS=1 ;;
   esac
@@ -41,17 +47,20 @@ fi
 
 RUNS_DIR="$RESULTS_DIR/runs"
 SCIP_LOG_DIR="$RESULTS_DIR/scip_logs"
+ALPHA_LOG_DIR="$RESULTS_DIR/alpha_logs"
 MANIFEST_DIR="${DATA_DIR:-$BBML_ROOT/data}/manifests"
 TASK_LOG_DIR="${DATA_DIR:-$BBML_ROOT/data}/pipeline_logs/run"
-mkdir -p "$RUNS_DIR" "$SCIP_LOG_DIR" "$MANIFEST_DIR" "$TASK_LOG_DIR"
+mkdir -p "$RUNS_DIR" "$SCIP_LOG_DIR" "$ALPHA_LOG_DIR" "$MANIFEST_DIR" "$TASK_LOG_DIR"
 
 INSTANCE_SETS=()
-if [ -n "$INSTANCE_SET_FILTER" ]; then
+if [ -n "$INSTANCE_SET_LIST" ]; then
+  IFS=',' read -ra INSTANCE_SETS <<< "$INSTANCE_SET_LIST"
+elif [ -n "$INSTANCE_SET_FILTER" ]; then
   INSTANCE_SETS+=("$INSTANCE_SET_FILTER")
 else
   while IFS= read -r list_file; do
     INSTANCE_SETS+=("$(basename "$list_file" .txt)")
-  done < <(find "$BBML_ROOT/benchmarks/instances" -maxdepth 1 -name '*_test.txt' | sort)
+  done < <(find "$INSTANCES_DIR" -maxdepth 1 -name '*_test.txt' | sort)
 fi
 
 if [ ${#INSTANCE_SETS[@]} -eq 0 ]; then
@@ -92,6 +101,9 @@ echo "  Seeds         : $SEEDS"
 echo "  Time limit    : ${TL}s"
 echo "  Run jobs      : $RUN_JOBS"
 echo "  Resume mode   : $( [ "$RUN_FORCE" = "1" ] && echo off || echo on )"
+echo "  Alpha logs    : $( [ "$ENABLE_ALPHA_LOG" = "1" ] && echo on || echo off )"
+echo "  Root cuts only: $( [ "$ROOT_CUTS_ONLY" = "1" ] && echo on || echo off )"
+echo "  No restarts   : $( [ "$DISABLE_RESTARTS" = "1" ] && echo on || echo off )"
 echo "  Runner        : $BBML_RUNNER_BIN"
 echo ""
 
@@ -99,6 +111,8 @@ PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
 BBML_ROOT="$BBML_ROOT" \
 RESULTS_DIR="$RESULTS_DIR" \
 MODEL_DIR="$MODEL_DIR" \
+INSTANCES_DIR="$INSTANCES_DIR" \
+ALPHA_LOG_DIR="$ALPHA_LOG_DIR" \
 BBML_RUNNER="$BBML_RUNNER_BIN" \
 TIME_LIMIT="$TL" \
 SEEDS="$SEEDS" \
@@ -108,6 +122,9 @@ SCRIPT="$SCRIPT_DIR/run_benchmark_task.py" \
 TASK_LOG_DIR="$TASK_LOG_DIR" \
 MANIFEST="$manifest" \
 RUN_FORCE="$RUN_FORCE" \
+ENABLE_ALPHA_LOG="$ENABLE_ALPHA_LOG" \
+ROOT_CUTS_ONLY="$ROOT_CUTS_ONLY" \
+DISABLE_RESTARTS="$DISABLE_RESTARTS" \
 python3 - <<'PY'
 import json
 import os
@@ -126,7 +143,7 @@ def resolve_instance(raw: str, instance_set: str, root: Path) -> Path:
     inst_path = Path(raw).expanduser()
     if inst_path.exists():
         return inst_path.resolve()
-    family, split = instance_set.rsplit("_", 1)
+    family, split = instance_set.split("_", 1)
     data_dir = Path(os.environ.get("DATA_DIR", str(root / "data")))
     fallback = data_dir / "instances" / family / split / inst_path.name
     if fallback.exists():
@@ -159,10 +176,33 @@ def completed_result(path: Path, solver: str, seed: str) -> bool:
         and "n_nodes" in record
     )
 
+
+def load_record(path: Path, solver: str, seed: str):
+    if not completed_result(path, solver, seed):
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def completed_alpha(path: Path, record) -> bool:
+    if record is None:
+        return False
+    try:
+        n_nodes = int(record.get("n_nodes", 0))
+    except (TypeError, ValueError):
+        n_nodes = 0
+    if n_nodes <= 1:
+        return True
+    return path.is_file() and path.stat().st_size > 0
+
 py_launch = json.loads(os.environ["PY_LAUNCH_JSON"])
 root = Path(os.environ["BBML_ROOT"])
 results_dir = Path(os.environ["RESULTS_DIR"])
 model_dir = Path(os.environ["MODEL_DIR"])
+instances_dir = Path(os.environ["INSTANCES_DIR"])
+alpha_log_dir = Path(os.environ["ALPHA_LOG_DIR"])
 runner_bin = os.environ["BBML_RUNNER"]
 time_limit = os.environ["TIME_LIMIT"]
 seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
@@ -172,6 +212,9 @@ script = os.environ["SCRIPT"]
 task_log_dir = Path(os.environ["TASK_LOG_DIR"])
 manifest = Path(os.environ["MANIFEST"])
 run_force = os.environ.get("RUN_FORCE", "0") == "1"
+enable_alpha_log = os.environ.get("ENABLE_ALPHA_LOG", "0") == "1"
+root_cuts_only = os.environ.get("ROOT_CUTS_ONLY", "0") == "1"
+disable_restarts = os.environ.get("DISABLE_RESTARTS", "0") == "1"
 
 graph_ensemble_paths = sorted(model_dir.glob("bbml_gnn_graph_member*.onnx"))
 graph_ensemble_model = ",".join(str(path) for path in graph_ensemble_paths) if graph_ensemble_paths else str(model_dir / "bbml_gnn_graph.onnx")
@@ -241,7 +284,7 @@ with manifest.open("w") as fh:
         total = 0
         runnable = 0
         skipped = 0
-        list_file = root / "benchmarks" / "instances" / f"{instance_set}.txt"
+        list_file = instances_dir / f"{instance_set}.txt"
         if not list_file.exists():
             continue
         for line in list_file.read_text().splitlines():
@@ -258,7 +301,18 @@ with manifest.open("w") as fh:
                     total += 1
                     result_out = results_dir / "runs" / method / f"{iid}_s{seed}.json"
                     scip_log = results_dir / "scip_logs" / method / f"{iid}_s{seed}.log"
-                    skip = (not run_force) and completed_result(result_out, method, seed) and completed_log(scip_log)
+                    alpha_log = alpha_log_dir / method / f"{iid}_s{seed}.csv"
+                    record = load_record(result_out, method, seed)
+                    skip = (
+                        not run_force
+                        and record is not None
+                        and completed_log(scip_log)
+                        and (
+                            (not enable_alpha_log)
+                            or spec.get("disable_ml")
+                            or completed_alpha(alpha_log, record)
+                        )
+                    )
                     if skip:
                         skipped += 1
                     else:
@@ -282,6 +336,12 @@ with manifest.open("w") as fh:
                         "--scip-log",
                         str(scip_log),
                     ]
+                    if root_cuts_only:
+                        cmd.append("--root-cuts-only")
+                    if disable_restarts:
+                        cmd.append("--disable-restarts")
+                    if enable_alpha_log and not spec.get("disable_ml"):
+                        cmd += ["--alpha-log-out", str(alpha_log)]
                     if spec.get("disable_ml"):
                         cmd.append("--disable-ml")
                     if spec.get("model"):

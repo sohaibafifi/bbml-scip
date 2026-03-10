@@ -242,6 +242,74 @@ bash benchmarks/pipeline/run_all.sh --skip-generate --skip-collect
 bash benchmarks/pipeline/run_all.sh --skip-generate --skip-collect --skip-train
 ```
 
+## Learn2Branch-style staged protocol
+
+The repository also ships a separate staged protocol that mirrors the structure
+of [learn2branch](https://github.com/ds4dm/learn2branch):
+
+- train one model family at a time
+- train on easy instances only
+- evaluate on easy / medium / hard test sets
+- benchmark with root cuts only and restarts disabled
+
+Entry point:
+
+```bash
+bash benchmarks/pipeline/learn2branch_stage.sh --stage=pilot --family=sc --step=all
+```
+
+Supported stages:
+
+- `pilot`: cheap smoke run for end-to-end validation
+- `dev`: moderate-scale development run
+- `final`: paper-scale counts (`10k` train, `2k` val, `20` test instances per difficulty, `5` solver seeds)
+
+Supported families:
+
+- `sc`
+- `ca`
+- `cfl`
+- `mis`
+
+The staged runner writes isolated artifacts per `(stage, family)`:
+
+- data: `data/learn2branch/<stage>/<family>/`
+- results: `results/learn2branch/<stage>/<family>/`
+- list files: `benchmarks/instances/learn2branch/<stage>/<family>/`
+
+Examples:
+
+```bash
+# 1. Generate staged instances and list files only
+bash benchmarks/pipeline/learn2branch_stage.sh --stage=pilot --family=sc --step=prepare
+
+# 2. Collect + convert only
+bash benchmarks/pipeline/learn2branch_stage.sh --stage=pilot --family=sc --step=collect
+bash benchmarks/pipeline/learn2branch_stage.sh --stage=pilot --family=sc --step=convert
+
+# 3. Train/export/benchmark/eval
+TRAIN_DEVICE=auto bash benchmarks/pipeline/learn2branch_stage.sh --stage=dev --family=cfl --step=train
+CALIBRATE_DEVICE=auto bash benchmarks/pipeline/learn2branch_stage.sh --stage=dev --family=cfl --step=export
+bash benchmarks/pipeline/learn2branch_stage.sh --stage=dev --family=cfl --step=bench
+bash benchmarks/pipeline/learn2branch_stage.sh --stage=dev --family=cfl --step=eval
+```
+
+By default the staged collector keeps `COLLECT_STRONGBRANCH=0`, which uses the
+current safe `chosen_idx` fallback labels. If your SCIP build handles
+strong-branch telemetry stably and you want closer paper fidelity, you can opt
+in with:
+
+```bash
+COLLECT_STRONGBRANCH=1 bash benchmarks/pipeline/learn2branch_stage.sh --stage=final --family=sc --step=collect
+```
+
+The staged benchmark step defaults to:
+
+- `BENCH_METHODS="scip-default,strong-branch,bbml-gnn-graph,bbml-mlp"`
+- `BENCH_ROOT_CUTS_ONLY=1`
+- `BENCH_DISABLE_RESTARTS=1`
+- test sets only: `<family>_easy_test,<family>_medium_test,<family>_hard_test`
+
 ## SCIP runtime parameters
 
 | Parameter | Default | Description |

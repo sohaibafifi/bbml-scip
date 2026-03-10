@@ -2,10 +2,10 @@
 Standalone benchmark instance generators following Gasse et al. 2019 (NeurIPS).
 
 Families:
-  sc   -- Set Covering        (1000 rows, 500 cols, density 0.05)
-  ca   -- Combinatorial Auctions (100 items, 500 bids, Leyton-Brown CATS)
-  cfl  -- Capacitated Facility Location (100 customers, 100 facilities)
-  mis  -- Maximum Independent Set (Barabasi-Albert, 500 nodes, m=4)
+  sc   -- Set Covering
+  ca   -- Combinatorial Auctions (Leyton-Brown CATS)
+  cfl  -- Capacitated Facility Location
+  mis  -- Maximum Independent Set
 
 Output: LP files compatible with SCIP.
 No ecole or SCIP dependency required -- only numpy and networkx.
@@ -80,9 +80,16 @@ def gen_sc(rng: np.random.Generator, n_rows: int = 1000, n_cols: int = 500, dens
     return obj, constrs, None, vars_
 
 
-def write_sc(path: pathlib.Path, seed: int) -> None:
+def write_sc(
+    path: pathlib.Path,
+    seed: int,
+    *,
+    n_rows: int = 1000,
+    n_cols: int = 500,
+    density: float = 0.05,
+) -> None:
     rng = np.random.default_rng(seed)
-    obj, constrs, _, binary = gen_sc(rng)
+    obj, constrs, _, binary = gen_sc(rng, n_rows=n_rows, n_cols=n_cols, density=density)
     _write_lp(path, "minimize", obj, constrs, binary=binary)
 
 
@@ -113,9 +120,16 @@ def gen_ca(rng: np.random.Generator, n_items: int = 100, n_bids: int = 500, max_
     return obj, constrs, None, vars_
 
 
-def write_ca(path: pathlib.Path, seed: int) -> None:
+def write_ca(
+    path: pathlib.Path,
+    seed: int,
+    *,
+    n_items: int = 100,
+    n_bids: int = 500,
+    max_bundle: int = 5,
+) -> None:
     rng = np.random.default_rng(seed)
-    obj, constrs, _, binary = gen_ca(rng)
+    obj, constrs, _, binary = gen_ca(rng, n_items=n_items, n_bids=n_bids, max_bundle=max_bundle)
     _write_lp(path, "minimize", obj, constrs, binary=binary)
 
 
@@ -157,9 +171,15 @@ def gen_cfl(rng: np.random.Generator, n_cust: int = 100, n_fac: int = 100) -> tu
     return obj, constrs, bounds, y_vars
 
 
-def write_cfl(path: pathlib.Path, seed: int) -> None:
+def write_cfl(
+    path: pathlib.Path,
+    seed: int,
+    *,
+    n_cust: int = 100,
+    n_fac: int = 100,
+) -> None:
     rng = np.random.default_rng(seed)
-    obj, constrs, bounds, y_vars = gen_cfl(rng)
+    obj, constrs, bounds, y_vars = gen_cfl(rng, n_cust=n_cust, n_fac=n_fac)
     _write_lp(path, "minimize", obj, constrs, bounds=bounds, binary=y_vars)
 
 
@@ -184,9 +204,15 @@ def gen_mis(rng: np.random.Generator, n_nodes: int = 500, m: int = 4) -> tuple[d
     return obj, constrs, None, vars_
 
 
-def write_mis(path: pathlib.Path, seed: int) -> None:
+def write_mis(
+    path: pathlib.Path,
+    seed: int,
+    *,
+    n_nodes: int = 500,
+    m: int = 4,
+) -> None:
     rng = np.random.default_rng(seed)
-    obj, constrs, _, binary = gen_mis(rng)
+    obj, constrs, _, binary = gen_mis(rng, n_nodes=n_nodes, m=m)
     _write_lp(path, "minimize", obj, constrs, binary=binary)
 
 
@@ -204,16 +230,35 @@ def main() -> None:
     parser.add_argument("--start", type=int, default=0, help="First instance index")
     parser.add_argument("--count", type=int, required=True, help="Number of instances to generate")
     parser.add_argument("--seed-offset", type=int, default=0, help="Added to instance index to get the RNG seed")
+    parser.add_argument("--sc-rows", type=int, default=1000, help="Set covering row count")
+    parser.add_argument("--sc-cols", type=int, default=500, help="Set covering column count")
+    parser.add_argument("--sc-density", type=float, default=0.05, help="Set covering density")
+    parser.add_argument("--ca-items", type=int, default=100, help="Combinatorial auction item count")
+    parser.add_argument("--ca-bids", type=int, default=500, help="Combinatorial auction bid count")
+    parser.add_argument("--ca-max-bundle", type=int, default=5, help="Combinatorial auction max bundle size")
+    parser.add_argument("--cfl-customers", type=int, default=100, help="Facility location customer count")
+    parser.add_argument("--cfl-facilities", type=int, default=100, help="Facility location facility count")
+    parser.add_argument("--mis-nodes", type=int, default=500, help="MIS node count")
+    parser.add_argument("--mis-affinity", type=int, default=4, help="MIS Barabasi-Albert attachment factor")
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     writer = WRITERS[args.family]
+    writer_kwargs: dict[str, int | float] = {}
+    if args.family == "sc":
+        writer_kwargs = {"n_rows": args.sc_rows, "n_cols": args.sc_cols, "density": args.sc_density}
+    elif args.family == "ca":
+        writer_kwargs = {"n_items": args.ca_items, "n_bids": args.ca_bids, "max_bundle": args.ca_max_bundle}
+    elif args.family == "cfl":
+        writer_kwargs = {"n_cust": args.cfl_customers, "n_fac": args.cfl_facilities}
+    elif args.family == "mis":
+        writer_kwargs = {"n_nodes": args.mis_nodes, "m": args.mis_affinity}
 
     for i in range(args.start, args.start + args.count):
         path = args.out_dir / f"{args.family}_{i:05d}.lp"
         if path.exists():
             continue
-        writer(path, seed=i + args.seed_offset)
+        writer(path, seed=i + args.seed_offset, **writer_kwargs)
         if (i - args.start + 1) % 500 == 0 or i == args.start:
             print(f"  {args.family}: {i - args.start + 1}/{args.count}", flush=True)
 

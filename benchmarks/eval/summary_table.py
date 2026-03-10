@@ -74,6 +74,53 @@ ISET_LABELS = {
     "all": "All",
 }
 
+FAMILY_LABELS = {
+    "sc": "Set Cover",
+    "ca": "Comb. Auction",
+    "cfl": "Facility Loc.",
+    "mis": "MIS",
+}
+
+DIFFICULTY_LABELS = {
+    "easy_test": "Easy",
+    "medium_test": "Medium",
+    "hard_test": "Hard",
+    "test": "",
+}
+
+
+def iset_label(name: str) -> str:
+    if name in ISET_LABELS:
+        return ISET_LABELS[name]
+    if name == "all":
+        return "All"
+    if "_" not in name:
+        return name
+    family, suffix = name.split("_", 1)
+    family_label = FAMILY_LABELS.get(family)
+    difficulty = DIFFICULTY_LABELS.get(suffix)
+    if family_label and difficulty is not None:
+        if difficulty:
+            return f"{family_label} ({difficulty})"
+        return family_label
+    return name
+
+
+def iset_sort_key(name: str) -> tuple[int, int, int, str]:
+    family_order = {"sc": 0, "ca": 1, "cfl": 2, "mis": 3}
+    difficulty_order = {"test": 0, "easy_test": 1, "medium_test": 2, "hard_test": 3}
+    if name == "all":
+        return (99, 99, 0, name)
+    if "_" not in name:
+        return (98, 98, 0, name)
+    family, suffix = name.split("_", 1)
+    return (
+        family_order.get(family, 97),
+        difficulty_order.get(suffix, 97),
+        0,
+        name,
+    )
+
 
 def sig_marker(row: pd.Series) -> str:
     markers = ""
@@ -94,10 +141,27 @@ def format_cell(val: float, best: float, sig: str = "", bold_if_best: bool = Tru
 def build_main_table(df: pd.DataFrame) -> str:
     present_isets = set(df["instance_set"].to_numpy().tolist())
     present_solvers_main = set(df["solver"].to_numpy().tolist())
-    preferred_isets = ["sc_test", "ca_test", "cfl_test", "mis_test"]
+    preferred_isets = [
+        "sc_test",
+        "ca_test",
+        "cfl_test",
+        "mis_test",
+        "sc_easy_test",
+        "sc_medium_test",
+        "sc_hard_test",
+        "ca_easy_test",
+        "ca_medium_test",
+        "ca_hard_test",
+        "cfl_easy_test",
+        "cfl_medium_test",
+        "cfl_hard_test",
+        "mis_easy_test",
+        "mis_medium_test",
+        "mis_hard_test",
+    ]
     isets = [c for c in preferred_isets if c in present_isets]
     if not isets:
-        isets = sorted(present_isets)
+        isets = sorted(present_isets, key=iset_sort_key)
     solvers = [s for s in SOLVER_ORDER if s in present_solvers_main]
     n_isets = len(isets)
 
@@ -119,7 +183,7 @@ def build_main_table(df: pd.DataFrame) -> str:
     # Header row 1
     hdr1 = r"\textbf{Method}"
     for iset in isets:
-        label = ISET_LABELS.get(iset, iset)
+        label = iset_label(iset)
         hdr1 += r" & \multicolumn{2}{c}{\textbf{" + label + r"}}"
     lines.append(hdr1 + r" \\")
 
@@ -162,6 +226,11 @@ def build_main_table(df: pd.DataFrame) -> str:
 
 def build_ablation_table(df: pd.DataFrame, iset: str = "sc_test") -> str:
     sub: pd.DataFrame = df[df["instance_set"] == iset]  # type: ignore[assignment]
+    if sub.empty:
+        test_isets = [name for name in df["instance_set"].to_numpy().tolist() if name != "all"]
+        if test_isets:
+            iset = sorted(set(test_isets), key=iset_sort_key)[0]
+            sub = df[df["instance_set"] == iset]  # type: ignore[assignment]
     present_solvers = set(sub["solver"].to_numpy().tolist())
     ablations = [a for a in ABLATION_ORDER if a in present_solvers]
     if not ablations:
@@ -173,7 +242,7 @@ def build_ablation_table(df: pd.DataFrame, iset: str = "sc_test") -> str:
     lines = []
     lines.append(r"\begin{table}[t]")
     lines.append(r"\centering")
-    lines.append(r"\caption{Low-cost ablations on the selected benchmark split. SGM(10). Lower is better.}")
+    lines.append(r"\caption{Low-cost ablations on " + iset_label(iset) + r". SGM(10). Lower is better.}")
     lines.append(r"\label{tab:ablations}")
     lines.append(r"\begin{tabular}{lcc}")
     lines.append(r"\toprule")
