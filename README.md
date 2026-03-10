@@ -88,7 +88,7 @@ families used in Gasse et al. 2019:
 - `cfl` — Capacitated Facility Location
 - `mis` — Maximum Independent Set
 
-No ecole is required. Instance generation uses only NumPy and NetworkX.
+No ecole is required. Instance generation uses NumPy and SciPy.
 
 ### Prerequisites
 
@@ -114,15 +114,20 @@ bash benchmarks/pipeline/00_generate.sh
 Generates 10 000 train / 2 000 val / 2 000 test LP files per family by default.
 The script chunks generation work and runs it in bounded parallelism.
 It writes `benchmarks/instances/{family}_{split}.txt` path lists.
+The staged generators now follow the original `learn2branch` distributions and
+formulations for all four families. In particular, CA uses the arbitrary-auction
+generator, CFL uses the geometric capacitated facility-location generator with
+tightening constraints, MIS uses the clique-formulation variant, and SC uses the
+Balas-Ho sparse construction.
 
 Quick smoke test: `N_TRAIN=200 N_VAL=50 N_TEST=50 bash benchmarks/pipeline/00_generate.sh`
 
 | Family | Problem | Variables | Constraints |
 |--------|---------|-----------|-------------|
 | SC  | Set Covering | 500 | 1 000 |
-| CA  | Combinatorial Auctions | ~500 | ~100 |
-| CFL | Capacitated Facility Location | ~200 | ~300 |
-| MIS | Maximum Independent Set (BA-500) | 500 | ~2 500 |
+| CA  | Combinatorial Auctions | ~500 | ~200 |
+| CFL | Capacitated Facility Location | ~10 100 | ~10 200 |
+| MIS | Maximum Independent Set (BA-500) | 500 | ~1 500–2 500 |
 
 **Step 1 — collect telemetry**
 ```bash
@@ -402,7 +407,7 @@ make test-cpp      # C++ only (requires CMake + GTest)
 
 ## Notes
 
-- **No ecole required**: instance generation uses only numpy and networkx.
+- **No ecole required**: instance generation uses only numpy and scipy.
 - **Reduced-cost fallback**: if the model path is empty or invalid, the branchrule still runs and falls back to the reduced-cost side of the blend.
 - **Hot reload**: increment `bbml/reload` to swap the ONNX model mid-solve without restarting SCIP.
 - **Graph vs var-only**: graph ONNX uses `(var_feat, con_feat, edge_index)` inputs; var-only uses `(var_feat,)` only. The exporter chooses automatically based on the checkpoint.

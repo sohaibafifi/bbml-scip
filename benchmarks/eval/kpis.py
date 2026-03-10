@@ -37,18 +37,36 @@ def shifted_geo_mean(vals: np.ndarray, shift: float) -> float:
 def load_results(results_dir: Path) -> pd.DataFrame:
     rows = []
     for path in sorted(results_dir.rglob("*.json")) + sorted(results_dir.rglob("*.jsonl")):
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = 0
         with open(path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    rows.append(json.loads(line))
+                    record = json.loads(line)
+                    record["_source_path"] = str(path)
+                    record["_source_mtime_ns"] = mtime_ns
+                    rows.append(record)
                 except json.JSONDecodeError:
                     pass
     if not rows:
         raise ValueError(f"No result records found in {results_dir}")
     return pd.DataFrame(rows)
+
+
+def dedupe_results(df: pd.DataFrame) -> pd.DataFrame:
+    key_cols = ["solver", "seed", "instance_id", "instance_set"]
+    available = [col for col in key_cols if col in df.columns]
+    if len(available) != len(key_cols):
+        return df
+    sort_cols = [col for col in ["_source_mtime_ns", "_source_path"] if col in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols)
+    return df.drop_duplicates(subset=key_cols, keep="last").reset_index(drop=True)
 
 
 def assign_instance_set(df: pd.DataFrame, instances_dir: Path) -> pd.DataFrame:
@@ -196,6 +214,7 @@ def main():
         df = assign_instance_set(df, args.instance_sets)
     else:
         df["instance_set"] = "all"
+    df = dedupe_results(df)
 
     kpis = compute_kpis(df, baseline=args.baseline, wtl_threshold=args.wtl_threshold)
 

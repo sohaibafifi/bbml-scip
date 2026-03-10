@@ -139,6 +139,11 @@ def instance_id(path: Path) -> str:
             name = name[: -len(suffix)]
     return name
 
+
+def run_stem(instance_set: str, iid: str, seed: str) -> str:
+    safe_set = instance_set.replace("/", "_")
+    return f"{safe_set}__{iid}_s{seed}"
+
 def resolve_instance(raw: str, instance_set: str, root: Path) -> Path:
     inst_path = Path(raw).expanduser()
     if inst_path.exists():
@@ -299,9 +304,10 @@ with manifest.open("w") as fh:
                     raise ValueError(f"Unsupported benchmark method: {method}")
                 for seed in seeds:
                     total += 1
-                    result_out = results_dir / "runs" / method / f"{iid}_s{seed}.json"
-                    scip_log = results_dir / "scip_logs" / method / f"{iid}_s{seed}.log"
-                    alpha_log = alpha_log_dir / method / f"{iid}_s{seed}.csv"
+                    stem = run_stem(instance_set, iid, seed)
+                    result_out = results_dir / "runs" / method / f"{stem}.json"
+                    scip_log = results_dir / "scip_logs" / method / f"{stem}.log"
+                    alpha_log = alpha_log_dir / method / f"{stem}.csv"
                     record = load_record(result_out, method, seed)
                     skip = (
                         not run_force
