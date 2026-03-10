@@ -47,6 +47,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run one SCIP benchmark task and persist a JSON result.")
     ap.add_argument("--runner-bin", required=True)
     ap.add_argument("--instance", required=True)
+    ap.add_argument("--instance-set", default="")
     ap.add_argument("--solver", required=True)
     ap.add_argument("--seed", required=True, type=int)
     ap.add_argument("--time-limit", required=True, type=int)
@@ -129,6 +130,8 @@ def main() -> int:
     record.update(
         {
             "instance_id": _instance_id(args.instance),
+            "instance_path": str(Path(args.instance).resolve()),
+            "instance_set": args.instance_set or "unknown",
             "solver": args.solver,
             "seed": args.seed,
         }

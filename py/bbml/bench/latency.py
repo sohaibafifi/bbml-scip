@@ -7,33 +7,60 @@ import onnxruntime as ort
 from bbml.train.train_rank import DEFAULT_FEATS
 
 
+def _ort_numpy_dtype(type_str: str) -> np.dtype:
+    if "float16" in type_str:
+        return np.float16
+    if "double" in type_str or "float64" in type_str:
+        return np.float64
+    return np.float32
+
+
 def _build_inputs(session: ort.InferenceSession, n_var: int, d_var: int, d_con: int, edge_factor: int) -> dict[str, np.ndarray]:
     inputs = session.get_inputs()
+    x_dtype = _ort_numpy_dtype(inputs[0].type)
     if len(inputs) <= 1:
-        return {inputs[0].name: np.random.randn(n_var, d_var).astype(np.float32)}
+        return {inputs[0].name: np.random.randn(n_var, d_var).astype(x_dtype)}
 
     n_con = max(1, n_var // 2)
     n_edge = max(1, n_var * edge_factor)
     rows = np.random.randint(0, n_con, size=(n_edge,), dtype=np.int64)
     cols = np.random.randint(0, n_var, size=(n_edge,), dtype=np.int64)
+    c_dtype = _ort_numpy_dtype(inputs[1].type)
     return {
-        inputs[0].name: np.random.randn(n_var, d_var).astype(np.float32),
-        inputs[1].name: np.random.randn(n_con, d_con).astype(np.float32),
+        inputs[0].name: np.random.randn(n_var, d_var).astype(x_dtype),
+        inputs[1].name: np.random.randn(n_con, d_con).astype(c_dtype),
         inputs[2].name: np.stack([rows, cols], axis=0),
     }
 
 
+def _preferred_providers() -> List[str]:
+    preferred = [
+        "CoreMLExecutionProvider",
+        "CUDAExecutionProvider",
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    available = ort.get_available_providers()
+    ordered = [provider for provider in preferred if provider in available]
+    return ordered or available
+
+
 def bench(onnx_path: str, dims: List[int], d_var: int, d_con: int, runs: int = 50, edge_factor: int = 2):
-    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    sess = ort.InferenceSession(onnx_path, providers=_preferred_providers())
+    print(f"providers={sess.get_providers()}")
     for n_var in dims:
         feed = _build_inputs(sess, n_var=n_var, d_var=d_var, d_con=d_con, edge_factor=edge_factor)
-        for _ in range(5):
-            sess.run(None, feed)
-        t0 = time.perf_counter()
-        for _ in range(runs):
-            sess.run(None, feed)
-        dt = (time.perf_counter() - t0) / runs
-        print(f"n_var={n_var:4d}  avg={dt*1e3:7.3f} ms")
+        try:
+            for _ in range(5):
+                sess.run(None, feed)
+            t0 = time.perf_counter()
+            for _ in range(runs):
+                sess.run(None, feed)
+            dt = (time.perf_counter() - t0) / runs
+            print(f"n_var={n_var:4d}  avg={dt*1e3:7.3f} ms")
+        except Exception as exc:
+            print(f"unsupported on current provider(s): {exc}")
+            return
 
 
 def main():

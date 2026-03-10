@@ -269,6 +269,8 @@ with manifest.open("w") as fh:
                         runner_bin,
                         "--instance",
                         str(inst_path),
+                        "--instance-set",
+                        instance_set,
                         "--solver",
                         method,
                         "--seed",

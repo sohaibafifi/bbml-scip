@@ -61,13 +61,24 @@ def assign_instance_set(df: pd.DataFrame, instances_dir: Path) -> pd.DataFrame:
                 line = line.strip()
                 if not line:
                     continue
+                raw_path = str(Path(line).expanduser().resolve())
+                set_map[raw_path] = set_name
                 iid = Path(line).stem
                 # Remove common extensions
                 for ext in (".lp", ".mps", ".gz"):
                     iid = iid.removesuffix(ext)
-                set_map[iid] = set_name
+                set_map.setdefault(iid, set_name)
     df = df.copy()
-    df["instance_set"] = df["instance_id"].map(set_map).fillna("unknown")
+    existing = df["instance_set"] if "instance_set" in df.columns else pd.Series(["unknown"] * len(df), index=df.index)
+    existing = existing.fillna("unknown").astype(str)
+    unresolved = existing.eq("unknown")
+    if "instance_path" in df.columns:
+        resolved_paths = df["instance_path"].astype(str).map(set_map)
+        existing = existing.where(~unresolved, resolved_paths.fillna(existing))
+        unresolved = existing.eq("unknown")
+    resolved_ids = df["instance_id"].astype(str).map(set_map)
+    existing = existing.where(~unresolved, resolved_ids.fillna(existing))
+    df["instance_set"] = existing
     return df
 
 
