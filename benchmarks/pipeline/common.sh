@@ -38,6 +38,18 @@ bbml_default_solver_jobs() {
   echo "$half"
 }
 
+bbml_default_train_jobs() {
+  local cpu
+  cpu="$(bbml_cpu_count)"
+  if [ "$cpu" -lt 2 ]; then
+    echo 1
+  elif [ "$cpu" -gt 2 ]; then
+    echo 2
+  else
+    echo "$cpu"
+  fi
+}
+
 bbml_resolve_python() {
   if [ -n "${BBML_PYTHON:-}" ]; then
     PYTHON_CMD=("$BBML_PYTHON")
