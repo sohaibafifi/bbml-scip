@@ -20,7 +20,13 @@ MAX_NODES="${COLLECT_MAX_NODES:-5000}"
 COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 COLLECT_FORCE="${COLLECT_FORCE:-0}"
-COLLECT_STRONGBRANCH="${COLLECT_STRONGBRANCH:-0}"
+if [ -n "${COLLECT_ORACLE:-}" ]; then
+  COLLECT_ORACLE_VALUE="$COLLECT_ORACLE"
+elif [ "${COLLECT_STRONGBRANCH:-0}" = "1" ]; then
+  COLLECT_ORACLE_VALUE="strongbranch"
+else
+  COLLECT_ORACLE_VALUE="vanillafullstrong"
+fi
 
 IFS=',' read -ra SPLIT_LIST <<< "$COLLECT_SPLITS"
 PY_LAUNCH_JSON="$(python3 - "${PYTHON_CMD[@]}" <<'PY'
@@ -57,7 +63,7 @@ echo "  Seeds        : $SEEDS"
 echo "  Time limit   : ${TL}s"
 echo "  Max nodes    : $MAX_NODES"
 echo "  Collect jobs : $COLLECT_JOBS"
-echo "  Strongbranch : $([ "$COLLECT_STRONGBRANCH" = "1" ] && printf 'on' || printf 'off (chosen_idx fallback)')"
+echo "  Oracle       : $COLLECT_ORACLE_VALUE"
 echo "  Resume mode  : $([ "$COLLECT_FORCE" = "1" ] && printf 'off (force rerun)' || printf 'on')"
 echo "  Runner       : $BBML_RUNNER_BIN"
 echo ""
@@ -82,7 +88,7 @@ for family in "${families[@]}"; do
     TL="$TL" \
     MAX_NODES="$MAX_NODES" \
     FORCE="$COLLECT_FORCE" \
-    STRONGBRANCH="$COLLECT_STRONGBRANCH" \
+    ORACLE="$COLLECT_ORACLE_VALUE" \
     python3 - <<'PY'
 import json
 import os
@@ -127,7 +133,7 @@ seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
 time_limit = os.environ["TL"]
 max_nodes = os.environ["MAX_NODES"]
 force = os.environ["FORCE"] == "1"
-strongbranch = os.environ["STRONGBRANCH"] == "1"
+oracle = os.environ["ORACLE"].strip() or "vanillafullstrong"
 
 candidate_dir = data_dir / "logs" / family / split / "candidates"
 graph_dir = data_dir / "logs" / family / split / "graph"
@@ -191,12 +197,14 @@ with list_file.open() as src, manifest.open("a") as out:
                     str(graph_out),
                     "--scip-log",
                     str(scip_log),
+                    "--telemetry-oracle",
+                    oracle,
                 ],
                 "cwd": os.getcwd(),
                 "log_path": str(data_dir / "pipeline_logs" / "collect" / f"{family}_{split}_{iid}_s{seed}.log"),
                 "skip": skip,
             }
-            if strongbranch:
+            if oracle == "strongbranch":
                 rec["cmd"].append("--telemetry-strongbranch")
             out.write(json.dumps(rec) + "\n")
 print(f"  queued total={total} runnable={runnable} skipped={skipped}")

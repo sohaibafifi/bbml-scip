@@ -25,6 +25,10 @@ TEST(BranchruleParams, EnableToggleAffectsTelemetry) {
   ASSERT_EQ(SCIPincludeDefaultPlugins(scip), SCIP_OKAY);
   // include our plugins (branchrule + nodesel)
   ASSERT_EQ(bbml::includeBranchruleML(scip), SCIP_OKAY);
+  ASSERT_EQ(
+      SCIPsetStringParam(scip, "bbml/telemetry/oracle",
+                         const_cast<char*>("vanillafullstrong")),
+      SCIP_OKAY);
 
   // Build simple MILP that tends to produce fractional LP at root
   ASSERT_EQ(SCIPcreateProbBasic(scip, "toggle"), SCIP_OKAY);
@@ -68,4 +72,3 @@ TEST(BranchruleParams, EnableToggleAffectsTelemetry) {
   ASSERT_EQ(SCIPreleaseVar(scip, &y), SCIP_OKAY);
   ASSERT_EQ(SCIPfree(&scip), SCIP_OKAY);
 }
-

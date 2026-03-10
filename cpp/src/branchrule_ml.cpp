@@ -3,12 +3,15 @@
 #include <cmath>
 #include <memory>
 #include <climits>
+#include <cctype>
 #include <string>
 #include <utility>
 #include <vector>
 #include "bbml/telemetry_logger.hpp"
+#include "scip/branch_vanillafullstrong.h"
 #include "scip/scip.h"
 #include "scip/scip_var.h"
+#include "scip/struct_branch.h"
 
 namespace bbml {
 
@@ -21,6 +24,37 @@ double sigmoid(double x) {
   }
   const double z = std::exp(x);
   return z / (1.0 + z);
+}
+
+std::string toLowerCopy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+enum class TelemetryOracleMode {
+  kNone,
+  kStrongbranch,
+  kVanillafullstrong,
+};
+
+TelemetryOracleMode parseTelemetryOracleMode(const char* oracle_param,
+                                             SCIP_Bool legacy_strongbranch) {
+  const std::string oracle = toLowerCopy(oracle_param != nullptr ? std::string(oracle_param) : std::string());
+  if (oracle.empty() || oracle == "default") {
+    return legacy_strongbranch ? TelemetryOracleMode::kStrongbranch : TelemetryOracleMode::kNone;
+  }
+  if (oracle == "none" || oracle == "off" || oracle == "disabled") {
+    return legacy_strongbranch ? TelemetryOracleMode::kStrongbranch : TelemetryOracleMode::kNone;
+  }
+  if (oracle == "strongbranch") {
+    return TelemetryOracleMode::kStrongbranch;
+  }
+  if (oracle == "vanillafullstrong" || oracle == "vfs") {
+    return TelemetryOracleMode::kVanillafullstrong;
+  }
+  return legacy_strongbranch ? TelemetryOracleMode::kStrongbranch : TelemetryOracleMode::kNone;
 }
 
 }  // namespace
@@ -90,6 +124,82 @@ static bool isCandidateBranchable(SCIP* scip, SCIP_VAR* var) {
   return !SCIPisFeasIntegral(scip, lpsol);
 }
 
+static bool collectVanillafullstrongOracle(
+    SCIP* scip,
+    SCIP_VAR** cands,
+    int ncands,
+    std::vector<double>* oracle_scores,
+    int* oracle_best_idx) {
+  if (oracle_scores == nullptr || oracle_best_idx == nullptr) {
+    return false;
+  }
+  if (SCIPgetLPSolstat(scip) != SCIP_LPSOLSTAT_OPTIMAL || !SCIPallColsInLP(scip) || SCIPisStopped(scip)) {
+    return false;
+  }
+
+  SCIP_BRANCHRULE* vfs = SCIPfindBranchrule(scip, "vanillafullstrong");
+  if (vfs == nullptr) {
+    return false;
+  }
+
+  if (SCIPsetBoolParam(scip, "branching/vanillafullstrong/donotbranch", TRUE) != SCIP_OKAY ||
+      SCIPsetBoolParam(scip, "branching/vanillafullstrong/collectscores", TRUE) != SCIP_OKAY ||
+      SCIPsetBoolParam(scip, "branching/vanillafullstrong/scoreall", TRUE) != SCIP_OKAY ||
+      SCIPsetBoolParam(scip, "branching/vanillafullstrong/idempotent", TRUE) != SCIP_OKAY ||
+      SCIPsetBoolParam(scip, "branching/vanillafullstrong/integralcands", FALSE) != SCIP_OKAY) {
+    return false;
+  }
+
+  if (vfs->branchexeclp == nullptr) {
+    return false;
+  }
+  SCIP_RESULT oracle_result = SCIP_DIDNOTRUN;
+  SCIP_RETCODE exec_rc = vfs->branchexeclp(scip, vfs, FALSE, &oracle_result);
+  if (exec_rc != SCIP_OKAY) {
+    return false;
+  }
+
+  SCIP_VAR** oracle_cands = nullptr;
+  SCIP_Real* oracle_candscores = nullptr;
+  int noracle = 0;
+  int nprio = 0;
+  int bestcand = -1;
+  if (SCIPgetVanillafullstrongData(
+          scip,
+          &oracle_cands,
+          &oracle_candscores,
+          &noracle,
+          &nprio,
+          &bestcand) != SCIP_OKAY) {
+    return false;
+  }
+  if (oracle_cands == nullptr || oracle_candscores == nullptr || noracle <= 0) {
+    return false;
+  }
+
+  oracle_scores->assign(static_cast<size_t>(ncands), 0.0);
+  *oracle_best_idx = -1;
+  for (int i = 0; i < noracle; ++i) {
+    for (int j = 0; j < ncands; ++j) {
+      if (oracle_cands[i] == cands[j]) {
+        (*oracle_scores)[static_cast<size_t>(j)] = static_cast<double>(oracle_candscores[i]);
+        if (i == bestcand) {
+          *oracle_best_idx = j;
+        }
+        break;
+      }
+    }
+  }
+
+  if (*oracle_best_idx < 0) {
+    auto best_it = std::max_element(oracle_scores->begin(), oracle_scores->end());
+    if (best_it != oracle_scores->end() && std::isfinite(*best_it)) {
+      *oracle_best_idx = static_cast<int>(std::distance(oracle_scores->begin(), best_it));
+    }
+  }
+  return *oracle_best_idx >= 0;
+}
+
 static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
                                      SCIP_BRANCHRULE* branchrule,
                                      SCIP_Bool /*allowaddcons*/,
@@ -118,6 +228,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   SCIP_Real temperature = 1.0;
   SCIP_Real cond_thresh = 1e8;
   char* model_path_c = nullptr;
+  char* telemetry_oracle_c = nullptr;
   int reload_counter = 0;
   char* tpath_c = nullptr;
   char* tgraph_path_c = nullptr;
@@ -125,6 +236,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   (void)SCIPgetBoolParam(scip, "bbml/enable", &enable);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry", &telemetry);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/strongbranch", &tlogsb);
+  (void)SCIPgetStringParam(scip, "bbml/telemetry/oracle", &telemetry_oracle_c);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/graph", &tgraph);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/alpha", &talpha);
   (void)SCIPgetBoolParam(scip, "bbml/alpha/use_confidence_gate", &use_confidence_gate);
@@ -212,10 +324,17 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     *result = SCIP_DIDNOTRUN;
     return SCIP_OKAY;
   }
-  // optional strong-branch scores for telemetry
+  int telemetry_idx = idx;
+  const TelemetryOracleMode telemetry_oracle =
+      parseTelemetryOracleMode(telemetry_oracle_c, tlogsb);
+  // optional oracle scores for telemetry
   std::vector<double> sb_up, sb_down;
   if (telemetry
-      && tlogsb
+      && telemetry_oracle == TelemetryOracleMode::kVanillafullstrong
+      && collectVanillafullstrongOracle(scip, cands, nc, &sb_up, &telemetry_idx)) {
+    sb_down.clear();
+  } else if (telemetry
+      && telemetry_oracle == TelemetryOracleMode::kStrongbranch
       && SCIPgetLPSolstat(scip) == SCIP_LPSOLSTAT_OPTIMAL
       && SCIPallColsInLP(scip)
       && !SCIPisStopped(scip)) {
@@ -257,11 +376,11 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   }
   // telemetry: log candidate set for this node
   if (telemetry) {
-    const std::vector<double>* sup = tlogsb ? &sb_up : nullptr;
-    const std::vector<double>* sdown = tlogsb ? &sb_down : nullptr;
-    getTelemetryLogger().log_node_candidates(scip, focus, feats, idx, sup, sdown);
+    const std::vector<double>* sup = !sb_up.empty() ? &sb_up : nullptr;
+    const std::vector<double>* sdown = !sb_down.empty() ? &sb_down : nullptr;
+    getTelemetryLogger().log_node_candidates(scip, focus, feats, telemetry_idx, sup, sdown);
     if (tgraph) {
-      getTelemetryLogger().log_graph_snapshot(scip, focus, feats, idx, sup, sdown);
+      getTelemetryLogger().log_graph_snapshot(scip, focus, feats, telemetry_idx, sup, sdown);
     }
   }
   if (telemetry && talpha) {
@@ -324,6 +443,10 @@ SCIP_RETCODE includeBranchruleML(SCIP* scip) {
   SCIP_CALL(SCIPaddBoolParam(scip, "bbml/telemetry/strongbranch",
       "log strong-branching scores in telemetry (expensive)", /*valueptr*/ nullptr, /*isadvanced*/ TRUE,
       /*default*/ FALSE, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
+  SCIP_CALL(SCIPaddStringParam(scip, "bbml/telemetry/oracle",
+      "telemetry oracle to use during collection: none, strongbranch, vanillafullstrong",
+      /*valueptr*/ nullptr, /*isadvanced*/ TRUE, /*default*/ "none",
+      /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddBoolParam(scip, "bbml/telemetry/graph",
       "log graph snapshots (var, con, edges) per node", /*valueptr*/ nullptr, /*isadvanced*/ TRUE,
       /*default*/ FALSE, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));

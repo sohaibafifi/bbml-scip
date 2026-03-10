@@ -294,14 +294,19 @@ bash benchmarks/pipeline/learn2branch_stage.sh --stage=dev --family=cfl --step=b
 bash benchmarks/pipeline/learn2branch_stage.sh --stage=dev --family=cfl --step=eval
 ```
 
-By default the staged collector keeps `COLLECT_STRONGBRANCH=0`, which uses the
-current safe `chosen_idx` fallback labels. If your SCIP build handles
-strong-branch telemetry stably and you want closer paper fidelity, you can opt
-in with:
+By default the staged collector uses `COLLECT_ORACLE=vanillafullstrong`, which
+asks SCIP's built-in `vanillafullstrong` plugin for oracle scores and the best
+candidate while keeping `integralcands=FALSE` so the scores stay aligned with
+the current LP branching candidates. You can still force the legacy raw
+strong-branch telemetry path with:
 
 ```bash
-COLLECT_STRONGBRANCH=1 bash benchmarks/pipeline/learn2branch_stage.sh --stage=final --family=sc --step=collect
+COLLECT_ORACLE=strongbranch bash benchmarks/pipeline/learn2branch_stage.sh --stage=final --family=sc --step=collect
 ```
+
+For compatibility with the current training loaders, the single
+`vanillafullstrong` oracle score is stored in the existing `sb_score_up`
+telemetry field, and `chosen_idx` is set to the oracle-selected candidate.
 
 The staged benchmark step defaults to:
 
@@ -317,6 +322,7 @@ The staged benchmark step defaults to:
 | `bbml/enable` | true | Enable ML-assisted branching |
 | `bbml/telemetry` | true | Enable candidate telemetry logging |
 | `bbml/telemetry/path` | "" | Candidate NDJSON output path |
+| `bbml/telemetry/oracle` | "none" | Telemetry oracle mode: `none`, `strongbranch`, or `vanillafullstrong` |
 | `bbml/telemetry/strongbranch` | false | Also log SB scores (expensive) |
 | `bbml/telemetry/graph` | false | Log graph snapshots (var/con/edge) |
 | `bbml/telemetry/graph_path` | "" | Graph NDJSON output path |
