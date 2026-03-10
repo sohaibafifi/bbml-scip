@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Dict, Iterable, Iterator, Optional, Sequence, Set
 
 import pandas as pd
@@ -8,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-def _diagnose_json_error(path: Path, original: Exception) -> Exception:
+def _validate_ndjson(path: Path, original: Exception) -> None:
     try:
         with path.open() as fh:
             for lineno, line in enumerate(fh, start=1):
@@ -25,7 +26,27 @@ def _diagnose_json_error(path: Path, original: Exception) -> Exception:
         raise
     except Exception:
         pass
-    raise ValueError(f"failed to parse {path}: {original}") from original
+
+
+def _iter_json_chunks_stdlib(path: Path, chunksize: int) -> Iterator[pd.DataFrame]:
+    rows: list[dict] = []
+    with path.open() as fh:
+        for lineno, line in enumerate(fh, start=1):
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError as err:
+                raise ValueError(f"invalid NDJSON in {path} at line {lineno}: {err.msg}") from err
+            if not isinstance(record, dict):
+                raise ValueError(f"invalid NDJSON in {path} at line {lineno}: expected object, got {type(record).__name__}")
+            rows.append(record)
+            if len(rows) >= chunksize:
+                yield pd.DataFrame.from_records(rows)
+                rows = []
+    if rows:
+        yield pd.DataFrame.from_records(rows)
 
 
 def _iter_json_chunks(paths: Sequence[Path], chunksize: int) -> Iterator[pd.DataFrame]:
@@ -37,7 +58,9 @@ def _iter_json_chunks(paths: Sequence[Path], chunksize: int) -> Iterator[pd.Data
         try:
             yield from pd.read_json(str(path), lines=True, chunksize=chunksize)
         except ValueError as err:
-            raise _diagnose_json_error(path, err)
+            _validate_ndjson(path, err)
+            print(f"[json_to_parquet] falling back to stdlib JSON reader for {path}: {err}", file=sys.stderr)
+            yield from _iter_json_chunks_stdlib(path, chunksize)
 
 
 def _read_manifest(path: Path) -> list[Path]:
