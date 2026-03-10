@@ -231,12 +231,15 @@ def train_epoch(
     loader: DataLoader,
     optim: torch.optim.Optimizer,
     device: str = "cpu",
+    log_every: int = 0,
 ):
     model.train()
     total_loss = 0.0
     correct = 0
     n = 0
-    for batch in loader:
+    t0 = time.time()
+    num_batches = len(loader)
+    for batch_idx, batch in enumerate(loader, start=1):
         optim.zero_grad()
         batch_loss = 0.0
         for grp in batch:
@@ -257,6 +260,8 @@ def train_epoch(
         batch_loss.backward()
         optim.step()
         total_loss += float(batch_loss.item())
+        if log_every > 0 and (batch_idx == num_batches or batch_idx % log_every == 0):
+            _log(f"[batch {batch_idx:04d}/{num_batches:04d}] " f"loss={batch_loss.item():.4f} " f"acc@1={correct / max(1, n):.3f} " f"elapsed={time.time() - t0:.1f}s")
     acc = correct / max(1, n)
     return total_loss / max(1, len(loader)), acc
 
@@ -327,12 +332,15 @@ def train_epoch_gnn(
     loader: DataLoader,
     optim: torch.optim.Optimizer,
     device: str = "cpu",
+    log_every: int = 0,
 ):
     model.train()
     total_loss = 0.0
     correct = 0
     n = 0
-    for batch in loader:
+    t0 = time.time()
+    num_batches = len(loader)
+    for batch_idx, batch in enumerate(loader, start=1):
         optim.zero_grad(set_to_none=True)
         batch_loss = 0.0
         for grp in batch:
@@ -368,6 +376,8 @@ def train_epoch_gnn(
         batch_loss.backward()
         optim.step()
         total_loss += float(batch_loss.item())
+        if log_every > 0 and (batch_idx == num_batches or batch_idx % log_every == 0):
+            _log(f"[batch {batch_idx:04d}/{num_batches:04d}] " f"loss={batch_loss.item():.4f} " f"acc@1={correct / max(1, n):.3f} " f"elapsed={time.time() - t0:.1f}s")
     acc = correct / max(1, n)
     return total_loss / max(1, len(loader)), acc
 
@@ -520,6 +530,12 @@ def main():
     parser.add_argument("--max_c", type=int, default=32)
     parser.add_argument("--ckpt", type=str, default="score_mlp.pt")
     parser.add_argument(
+        "--log_every",
+        type=int,
+        default=10,
+        help="Print batch progress every N loader steps within an epoch; 0 disables intra-epoch logs.",
+    )
+    parser.add_argument(
         "--ckpt_best",
         type=str,
         default=None,
@@ -643,9 +659,9 @@ def main():
 
     for epoch in range(1, args.epochs + 1):
         if args.model == "mlp":
-            loss, acc = train_epoch(model, loader, optim, device=device)
+            loss, acc = train_epoch(model, loader, optim, device=device, log_every=args.log_every)
         else:
-            loss, acc = train_epoch_gnn(model, loader, optim, device=device)
+            loss, acc = train_epoch_gnn(model, loader, optim, device=device, log_every=args.log_every)
         _log(f"[epoch {epoch:03d}] loss={loss:.4f} acc@1={acc:.3f}")
         # Check for improvement and save best
         val = acc if select_higher else loss
