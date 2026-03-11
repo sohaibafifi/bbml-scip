@@ -14,6 +14,8 @@ from bbml.train.train_rank import (
     GraphJsonNodeDataset,
     NodeDataset,
     ScoreMLP,
+    _auto_num_workers,
+    _build_loader_kwargs,
     collate_graph_groups,
     collate_groups,
 )
@@ -95,14 +97,46 @@ def _load_models(ckpt_spec: str, device: str) -> Tuple[List[nn.Module], dict]:
 
 
 def _build_loader(cfg: dict, args: argparse.Namespace) -> DataLoader:
+    if args.num_workers < 0:
+        args.num_workers = _auto_num_workers()
+    if args.pin_memory < 0:
+        args.pin_memory = int(str(args.device).startswith("cuda"))
+    pin_memory = bool(args.pin_memory)
     if cfg["model"] == "mlp":
         dataset = NodeDataset(args.parquet, feature_cols=DEFAULT_FEATS)
-        return DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_groups)
+        return DataLoader(
+            dataset,
+            **_build_loader_kwargs(
+                batch_size=args.batch_size,
+                shuffle=False,
+                collate_fn=collate_groups,
+                num_workers=args.num_workers,
+                pin_memory=pin_memory,
+            ),
+        )
     if cfg.get("graph_inputs", False):
         dataset = GraphJsonNodeDataset(ndjson_path=args.graph_ndjson, manifest_path=args.graph_manifest)
-        return DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_graph_groups)
+        return DataLoader(
+            dataset,
+            **_build_loader_kwargs(
+                batch_size=args.batch_size,
+                shuffle=False,
+                collate_fn=collate_graph_groups,
+                num_workers=args.num_workers,
+                pin_memory=pin_memory,
+            ),
+        )
     dataset = NodeDataset(args.parquet, feature_cols=DEFAULT_FEATS)
-    return DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_groups)
+    return DataLoader(
+        dataset,
+        **_build_loader_kwargs(
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate_groups,
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
+        ),
+    )
 
 
 def _score_group(models: List[nn.Module], group, cfg: dict, device: str) -> torch.Tensor:
@@ -171,6 +205,8 @@ def main():
     ap.add_argument("--graph_manifest", type=str, default=None, help="Manifest of graph NDJSON validation files")
     ap.add_argument("--batch_size", type=int, default=32)
     ap.add_argument("--device", type=str, default="auto")
+    ap.add_argument("--num_workers", type=int, default=-1, help="DataLoader workers. -1 selects an automatic default.")
+    ap.add_argument("--pin_memory", type=int, default=-1, help="Pin DataLoader memory. -1 selects automatically.")
     ap.add_argument("--out", type=str, default=None, help="Optional file to write the fitted temperature into")
     args = ap.parse_args()
 

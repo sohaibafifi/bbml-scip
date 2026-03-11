@@ -15,6 +15,8 @@ RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"
 MODEL_DIR="$RESULTS_DIR/models"
 EXPORT_JOBS="${EXPORT_JOBS:-2}"
 CALIBRATE_DEVICE="${CALIBRATE_DEVICE:-$(bbml_detect_torch_device)}"
+CALIBRATE_NUM_WORKERS="${CALIBRATE_NUM_WORKERS:--1}"
+CALIBRATE_PIN_MEMORY="${CALIBRATE_PIN_MEMORY:--1}"
 EXPORT_FORCE="${EXPORT_FORCE:-0}"
 VAL_PARQUET="$DATA_DIR/parquet/val.parquet"
 GRAPH_VAL_MANIFEST="$DATA_DIR/manifests/graph/val.txt"
@@ -46,6 +48,8 @@ fi
 echo "=== Calibration and export ==="
 echo "  Export jobs : $EXPORT_JOBS"
 echo "  Device      : $CALIBRATE_DEVICE"
+echo "  Workers     : $CALIBRATE_NUM_WORKERS"
+echo "  Pin memory  : $CALIBRATE_PIN_MEMORY"
 echo "  Resume      : $( [ "$EXPORT_FORCE" = "1" ] && printf 'off (EXPORT_FORCE=1)' || printf 'on' )"
 echo ""
 
@@ -58,6 +62,8 @@ else
     --parquet "$VAL_PARQUET" \
     --graph_manifest "$GRAPH_VAL_MANIFEST" \
     --device "$CALIBRATE_DEVICE" \
+    --num_workers "$CALIBRATE_NUM_WORKERS" \
+    --pin_memory "$CALIBRATE_PIN_MEMORY" \
     --out "$MODEL_DIR/bbml_gnn_graph.temperature.txt"
 fi
 
@@ -68,6 +74,8 @@ else
     --ckpt "$GNN_VARONLY_CKPT" \
     --parquet "$VAL_PARQUET" \
     --device "$CALIBRATE_DEVICE" \
+    --num_workers "$CALIBRATE_NUM_WORKERS" \
+    --pin_memory "$CALIBRATE_PIN_MEMORY" \
     --out "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"
 fi
 
@@ -78,6 +86,8 @@ else
     --ckpt "$MLP_CKPT" \
     --parquet "$VAL_PARQUET" \
     --device "$CALIBRATE_DEVICE" \
+    --num_workers "$CALIBRATE_NUM_WORKERS" \
+    --pin_memory "$CALIBRATE_PIN_MEMORY" \
     --out "$MODEL_DIR/bbml_mlp.temperature.txt"
 fi
 

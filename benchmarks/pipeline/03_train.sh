@@ -34,6 +34,8 @@ SEED="${TRAIN_SEED:-0}"
 ENSEMBLE_SIZE="${TRAIN_ENSEMBLE_SIZE:-3}"
 TRAIN_DEVICE="${TRAIN_DEVICE:-$(bbml_detect_torch_device)}"
 TRAIN_LOG_EVERY="${TRAIN_LOG_EVERY:-10}"
+TRAIN_NUM_WORKERS="${TRAIN_NUM_WORKERS:--1}"
+TRAIN_PIN_MEMORY="${TRAIN_PIN_MEMORY:--1}"
 TRAIN_FORCE="${TRAIN_FORCE:-0}"
 
 if [ -n "${TRAIN_JOBS:-}" ]; then
@@ -58,7 +60,7 @@ if [ "$TRAIN_JOBS_VALUE" -gt 1 ] && [ "$TRAIN_DEVICE" != "cpu" ]; then
   echo "WARNING: TRAIN_JOBS=$TRAIN_JOBS_VALUE with device=$TRAIN_DEVICE may be slower due to device contention."
 fi
 
-export EPOCHS BATCH_SIZE LR HIDDEN DROPOUT TRAIN_DEVICE TRAIN_LOG_EVERY
+export EPOCHS BATCH_SIZE LR HIDDEN DROPOUT TRAIN_DEVICE TRAIN_LOG_EVERY TRAIN_NUM_WORKERS TRAIN_PIN_MEMORY
 
 PYTHON_CMD_JSON="$(bbml_python_json_array)"
 
@@ -103,6 +105,10 @@ cmd.extend(
         "loss",
         "--log_every",
         os.environ["TRAIN_LOG_EVERY"],
+        "--num_workers",
+        os.environ["TRAIN_NUM_WORKERS"],
+        "--pin_memory",
+        os.environ["TRAIN_PIN_MEMORY"],
         "--ckpt_best",
         ckpt_path,
     ]
@@ -142,6 +148,8 @@ echo "  Dropout   : $DROPOUT"
 echo "  Device    : $TRAIN_DEVICE"
 echo "  Ensemble  : $ENSEMBLE_SIZE graph checkpoints"
 echo "  Train jobs: $TRAIN_JOBS_VALUE"
+echo "  Workers   : $TRAIN_NUM_WORKERS"
+echo "  Pin memory: $TRAIN_PIN_MEMORY"
 echo "  Resume    : $( [ "$TRAIN_FORCE" = "1" ] && printf 'off (TRAIN_FORCE=1)' || printf 'on' )"
 echo ""
 
@@ -170,6 +178,8 @@ if [ "$TRAIN_JOBS_VALUE" -le 1 ]; then
       --seed "$member_seed" \
       --metric loss \
       --log_every "$TRAIN_LOG_EVERY" \
+      --num_workers "$TRAIN_NUM_WORKERS" \
+      --pin_memory "$TRAIN_PIN_MEMORY" \
       --ckpt_best "$member_ckpt"
   done
 
@@ -189,6 +199,8 @@ if [ "$TRAIN_JOBS_VALUE" -le 1 ]; then
       --seed "$SEED" \
       --metric loss \
       --log_every "$TRAIN_LOG_EVERY" \
+      --num_workers "$TRAIN_NUM_WORKERS" \
+      --pin_memory "$TRAIN_PIN_MEMORY" \
       --ckpt_best "$MODEL_DIR/bbml_gnn_varonly_best.pt"
   fi
 
@@ -208,6 +220,8 @@ if [ "$TRAIN_JOBS_VALUE" -le 1 ]; then
       --seed "$SEED" \
       --metric loss \
       --log_every "$TRAIN_LOG_EVERY" \
+      --num_workers "$TRAIN_NUM_WORKERS" \
+      --pin_memory "$TRAIN_PIN_MEMORY" \
       --ckpt_best "$MODEL_DIR/bbml_mlp_best.pt"
   fi
 else

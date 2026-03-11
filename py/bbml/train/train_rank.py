@@ -43,6 +43,33 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def _auto_num_workers() -> int:
+    cpu = os.cpu_count() or 1
+    if cpu <= 2:
+        return 0
+    return min(8, max(2, cpu // 2))
+
+
+def _build_loader_kwargs(
+    batch_size: int,
+    shuffle: bool,
+    collate_fn,
+    num_workers: int,
+    pin_memory: bool,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "collate_fn": collate_fn,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"] = 2
+    return kwargs
+
+
 def _safe_numeric_frame(df: pd.DataFrame) -> np.ndarray:
     arr = df.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32, copy=True)
     return _safe_numeric_array(arr)
@@ -392,6 +419,7 @@ class GraphJsonNodeDataset(Dataset):
         t0 = time.time()
         self.paths = self._resolve_paths(ndjson_path, manifest_path)
         self._offsets: List[tuple[str, int]] = []
+        self._items: Optional[List[GraphNodeGroup]] = None
         self.d_var = 0
         self.d_con = 0
         cache_path = self._cache_path(ndjson_path, manifest_path)
@@ -415,6 +443,15 @@ class GraphJsonNodeDataset(Dataset):
                 self.d_con = int(g0.con_feat.size(1)) if g0.con_feat is not None else 0
             if cache_path:
                 self._save_cache(cache_path)
+        item_cache_path = self._item_cache_path(ndjson_path, manifest_path)
+        if self._should_preload():
+            if item_cache_path and self._load_item_cache(item_cache_path):
+                _log(f"[data] loaded cached graph items from {item_cache_path}")
+            else:
+                _log(f"[data] preloading {len(self._offsets)} graph nodes into memory")
+                self._items = [self._read_item(i) for i in range(len(self._offsets))]
+                if item_cache_path:
+                    self._save_item_cache(item_cache_path)
         _log(f"[data] graph dataset ready: {len(self._offsets)} node groups, " f"d_var={self.d_var}, d_con={self.d_con}, took {time.time() - t0:.1f}s")
 
     @staticmethod
@@ -447,8 +484,28 @@ class GraphJsonNodeDataset(Dataset):
             return Path(ndjson_path).with_suffix(Path(ndjson_path).suffix + ".offsets.pt")
         return None
 
+    @staticmethod
+    def _item_cache_path(ndjson_path: Optional[str], manifest_path: Optional[str]) -> Optional[Path]:
+        if manifest_path:
+            return Path(manifest_path).with_suffix(Path(manifest_path).suffix + ".items.pt")
+        if ndjson_path:
+            return Path(ndjson_path).with_suffix(Path(ndjson_path).suffix + ".items.pt")
+        return None
+
     def _path_signature(self) -> List[tuple[str, int, int]]:
         return [(path, os.path.getsize(path), os.stat(path).st_mtime_ns) for path in self.paths]
+
+    def _total_bytes(self) -> int:
+        return sum(size for _, size, _ in self._path_signature())
+
+    def _should_preload(self) -> bool:
+        mode = os.environ.get("BBML_GRAPH_PRELOAD", "auto").strip().lower()
+        if mode in {"0", "false", "no", "off"}:
+            return False
+        if mode in {"1", "true", "yes", "on"}:
+            return True
+        # Auto mode: keep pilot/small dev sets hot in RAM; avoid huge final sets.
+        return len(self._offsets) <= 10000 and self._total_bytes() <= 512 * 1024 * 1024
 
     def _load_cache(self, cache_path: Path) -> bool:
         if not cache_path.exists():
@@ -470,6 +527,52 @@ class GraphJsonNodeDataset(Dataset):
             "offsets": self._offsets,
             "d_var": self.d_var,
             "d_con": self.d_con,
+        }
+        try:
+            torch.save(payload, cache_path)
+        except Exception:
+            return
+
+    def _serialize_item(self, item: "GraphNodeGroup") -> Dict[str, Any]:
+        return {
+            "var_feat": item.var_feat,
+            "con_feat": item.con_feat,
+            "edge_index": item.edge_index,
+            "y_true": item.y_true,
+            "chosen": item.chosen,
+        }
+
+    def _deserialize_item(self, payload: Dict[str, Any]) -> "GraphNodeGroup":
+        return GraphNodeGroup(
+            var_feat=payload["var_feat"],
+            con_feat=payload.get("con_feat"),
+            edge_index=payload["edge_index"],
+            y_true=payload.get("y_true"),
+            chosen=payload.get("chosen"),
+        )
+
+    def _load_item_cache(self, cache_path: Path) -> bool:
+        if not cache_path.exists():
+            return False
+        try:
+            payload = torch.load(cache_path, map_location="cpu")
+        except Exception:
+            return False
+        if payload.get("signature") != self._path_signature():
+            return False
+        try:
+            self._items = [self._deserialize_item(obj) for obj in payload.get("items", [])]
+        except Exception:
+            self._items = None
+            return False
+        return len(self._items) == len(self._offsets)
+
+    def _save_item_cache(self, cache_path: Path) -> None:
+        if self._items is None:
+            return
+        payload = {
+            "signature": self._path_signature(),
+            "items": [self._serialize_item(item) for item in self._items],
         }
         try:
             torch.save(payload, cache_path)
@@ -503,6 +606,8 @@ class GraphJsonNodeDataset(Dataset):
         return GraphNodeGroup(var_feat=var_feat, con_feat=con_feat, edge_index=edge_index, y_true=y_true, chosen=chosen)
 
     def __getitem__(self, idx: int) -> "GraphNodeGroup":
+        if self._items is not None:
+            return self._items[idx]
         return self._read_item(idx)
 
 
@@ -524,6 +629,18 @@ def main():
     parser.add_argument("--graph_manifest", type=str, default=None, help="Manifest of graph NDJSON files, one path per line")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=-1,
+        help="DataLoader workers. -1 selects an automatic default.",
+    )
+    parser.add_argument(
+        "--pin_memory",
+        type=int,
+        default=-1,
+        help="Pin DataLoader memory for faster host->device copies. -1 selects automatically.",
+    )
     parser.add_argument("--synthetic_nodes", type=int, default=512)
     parser.add_argument("--d", type=int, default=len(DEFAULT_FEATS))
     parser.add_argument("--min_c", type=int, default=8)
@@ -552,6 +669,14 @@ def main():
 
     torch.manual_seed(args.seed)
     _log(f"[train] seed={args.seed}")
+    device = args.device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.num_workers < 0:
+        args.num_workers = _auto_num_workers()
+    if args.pin_memory < 0:
+        args.pin_memory = int(device.startswith("cuda"))
+    pin_memory = bool(args.pin_memory)
 
     # Track model config for checkpoint metadata
     model_cfg: Dict[str, Any]
@@ -570,7 +695,16 @@ def main():
         else:
             ds = NodeDataset(args.parquet, feature_cols=DEFAULT_FEATS)
             d_in = len(DEFAULT_FEATS)
-        loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_groups)
+        loader = DataLoader(
+            ds,
+            **_build_loader_kwargs(
+                batch_size=args.batch_size,
+                shuffle=True,
+                collate_fn=collate_groups,
+                num_workers=args.num_workers,
+                pin_memory=pin_memory,
+            ),
+        )
         model = ScoreMLP(d_in=d_in, hidden=args.hidden, dropout=args.dropout)
         model_cfg = {
             "model": "mlp",
@@ -584,9 +718,13 @@ def main():
             ds_g = GraphJsonNodeDataset(args.graph_ndjson, args.graph_manifest)
             loader = DataLoader(
                 ds_g,
-                batch_size=args.batch_size,
-                shuffle=True,
-                collate_fn=collate_graph_groups,
+                **_build_loader_kwargs(
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    collate_fn=collate_graph_groups,
+                    num_workers=args.num_workers,
+                    pin_memory=pin_memory,
+                ),
             )
             d_var, d_con = ds_g.d_var, ds_g.d_con
             layers_used, graph_inputs = 3, True
@@ -602,9 +740,13 @@ def main():
             ds_g = GraphSyntheticNodeDataset(n_nodes=args.synthetic_nodes, d_var=args.d, d_con=args.d, seed=args.seed)
             loader = DataLoader(
                 ds_g,
-                batch_size=args.batch_size,
-                shuffle=True,
-                collate_fn=collate_graph_groups,
+                **_build_loader_kwargs(
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    collate_fn=collate_graph_groups,
+                    num_workers=args.num_workers,
+                    pin_memory=pin_memory,
+                ),
             )
             d_var, d_con, layers_used, graph_inputs = args.d, args.d, 3, True
             _log(f"[data] using synthetic GNN dataset with {len(ds_g)} node groups")
@@ -618,7 +760,16 @@ def main():
         else:
             # Fallback: load tabular dataset and use var-only path (no edges)
             ds = NodeDataset(args.parquet, feature_cols=DEFAULT_FEATS)
-            loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_groups)
+            loader = DataLoader(
+                ds,
+                **_build_loader_kwargs(
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    collate_fn=collate_groups,
+                    num_workers=args.num_workers,
+                    pin_memory=pin_memory,
+                ),
+            )
             d_var, d_con, layers_used, graph_inputs = (
                 len(DEFAULT_FEATS),
                 len(DEFAULT_FEATS),
@@ -642,11 +793,8 @@ def main():
             "dropout": args.dropout,
             "graph_inputs": graph_inputs,
         }
-    device = args.device
-    if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    _log(f"[train] model={model_cfg['model']} device={device} hidden={args.hidden} dropout={args.dropout}")
+    _log(f"[train] model={model_cfg['model']} device={device} hidden={args.hidden} dropout={args.dropout} " f"num_workers={args.num_workers} pin_memory={pin_memory}")
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr)
 

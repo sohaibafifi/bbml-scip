@@ -65,3 +65,9 @@ cpp/libs/
 *.parquet
 *.lp
 plan.txt
+
+benchmarks/instances
+data
+libs
+.DS_Store
+*.log
