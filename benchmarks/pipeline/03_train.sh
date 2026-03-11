@@ -34,6 +34,7 @@ SEED="${TRAIN_SEED:-0}"
 ENSEMBLE_SIZE="${TRAIN_ENSEMBLE_SIZE:-3}"
 TRAIN_DEVICE="${TRAIN_DEVICE:-$(bbml_detect_torch_device)}"
 TRAIN_LOG_EVERY="${TRAIN_LOG_EVERY:-10}"
+TRAIN_FORCE="${TRAIN_FORCE:-0}"
 
 if [ -n "${TRAIN_JOBS:-}" ]; then
   TRAIN_JOBS_VALUE="$TRAIN_JOBS"
@@ -68,14 +69,15 @@ append_train_task() {
   local ckpt_path="$4"
   local model_kind="$5"
   local seed_value="$6"
-  shift 6
+  local skip_value="$7"
+  shift 7
 
-  TRAIN_TASK_PYTHON_CMD_JSON="$PYTHON_CMD_JSON" python3 - "$manifest" "$name" "$log_path" "$BBML_ROOT" "$ckpt_path" "$model_kind" "$seed_value" "$@" <<'PY'
+  TRAIN_TASK_PYTHON_CMD_JSON="$PYTHON_CMD_JSON" python3 - "$manifest" "$name" "$log_path" "$BBML_ROOT" "$ckpt_path" "$model_kind" "$seed_value" "$skip_value" "$@" <<'PY'
 import json
 import os
 import sys
 
-manifest, name, log_path, cwd, ckpt_path, model_kind, seed_value, *extra_args = sys.argv[1:]
+manifest, name, log_path, cwd, ckpt_path, model_kind, seed_value, skip_value, *extra_args = sys.argv[1:]
 cmd = json.loads(os.environ["TRAIN_TASK_PYTHON_CMD_JSON"])
 cmd.extend(
     [
@@ -115,6 +117,7 @@ with open(manifest, "a", encoding="utf-8") as fh:
                 "cwd": cwd,
                 "log_path": log_path,
                 "env": {},
+                "skip": skip_value == "1",
             }
         )
         + "\n"
@@ -139,6 +142,7 @@ echo "  Dropout   : $DROPOUT"
 echo "  Device    : $TRAIN_DEVICE"
 echo "  Ensemble  : $ENSEMBLE_SIZE graph checkpoints"
 echo "  Train jobs: $TRAIN_JOBS_VALUE"
+echo "  Resume    : $( [ "$TRAIN_FORCE" = "1" ] && printf 'off (TRAIN_FORCE=1)' || printf 'on' )"
 echo ""
 
 if [ "$TRAIN_JOBS_VALUE" -le 1 ]; then
@@ -148,6 +152,10 @@ if [ "$TRAIN_JOBS_VALUE" -le 1 ]; then
     member_ckpt="$MODEL_DIR/bbml_gnn_graph_member${member_idx}_best.pt"
     if [ "$member_idx" -eq 0 ]; then
       member_ckpt="$MODEL_DIR/bbml_gnn_graph_best.pt"
+    fi
+    if [ "$TRAIN_FORCE" != "1" ] && bbml_nonempty_file "$member_ckpt"; then
+      echo "  - graph member $member_idx (seed=$member_seed) already trained -> $member_ckpt"
+      continue
     fi
     echo "  - graph member $member_idx (seed=$member_seed) -> $member_ckpt"
     "${PYTHON_CMD[@]}" -m bbml.train.train_rank \
@@ -166,34 +174,42 @@ if [ "$TRAIN_JOBS_VALUE" -le 1 ]; then
   done
 
   echo "[2/3] Training var-only GNN from aggregate parquet..."
-  "${PYTHON_CMD[@]}" -m bbml.train.train_rank \
-    --model gnn \
-    --parquet "$TRAIN_PARQUET" \
-    --epochs "$EPOCHS" \
-    --batch_size "$BATCH_SIZE" \
-    --lr "$LR" \
-    --hidden "$HIDDEN" \
-    --dropout "$DROPOUT" \
-    --device "$TRAIN_DEVICE" \
-    --seed "$SEED" \
-    --metric loss \
-    --log_every "$TRAIN_LOG_EVERY" \
-    --ckpt_best "$MODEL_DIR/bbml_gnn_varonly_best.pt"
+  if [ "$TRAIN_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_gnn_varonly_best.pt"; then
+    echo "  - var-only GNN already trained -> $MODEL_DIR/bbml_gnn_varonly_best.pt"
+  else
+    "${PYTHON_CMD[@]}" -m bbml.train.train_rank \
+      --model gnn \
+      --parquet "$TRAIN_PARQUET" \
+      --epochs "$EPOCHS" \
+      --batch_size "$BATCH_SIZE" \
+      --lr "$LR" \
+      --hidden "$HIDDEN" \
+      --dropout "$DROPOUT" \
+      --device "$TRAIN_DEVICE" \
+      --seed "$SEED" \
+      --metric loss \
+      --log_every "$TRAIN_LOG_EVERY" \
+      --ckpt_best "$MODEL_DIR/bbml_gnn_varonly_best.pt"
+  fi
 
   echo "[3/3] Training MLP from aggregate parquet..."
-  "${PYTHON_CMD[@]}" -m bbml.train.train_rank \
-    --model mlp \
-    --parquet "$TRAIN_PARQUET" \
-    --epochs "$EPOCHS" \
-    --batch_size "$BATCH_SIZE" \
-    --lr "$LR" \
-    --hidden "$HIDDEN" \
-    --dropout "$DROPOUT" \
-    --device "$TRAIN_DEVICE" \
-    --seed "$SEED" \
-    --metric loss \
-    --log_every "$TRAIN_LOG_EVERY" \
-    --ckpt_best "$MODEL_DIR/bbml_mlp_best.pt"
+  if [ "$TRAIN_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_mlp_best.pt"; then
+    echo "  - MLP already trained -> $MODEL_DIR/bbml_mlp_best.pt"
+  else
+    "${PYTHON_CMD[@]}" -m bbml.train.train_rank \
+      --model mlp \
+      --parquet "$TRAIN_PARQUET" \
+      --epochs "$EPOCHS" \
+      --batch_size "$BATCH_SIZE" \
+      --lr "$LR" \
+      --hidden "$HIDDEN" \
+      --dropout "$DROPOUT" \
+      --device "$TRAIN_DEVICE" \
+      --seed "$SEED" \
+      --metric loss \
+      --log_every "$TRAIN_LOG_EVERY" \
+      --ckpt_best "$MODEL_DIR/bbml_mlp_best.pt"
+  fi
 else
   GRAPH_MANIFEST="$TRAIN_MANIFEST_DIR/train_graph_tasks.jsonl"
   TABULAR_MANIFEST="$TRAIN_MANIFEST_DIR/train_tabular_tasks.jsonl"
@@ -209,6 +225,11 @@ else
     fi
     member_log="$TRAIN_LOG_DIR/bbml_gnn_graph_member${member_idx}.log"
     echo "  - graph member $member_idx (seed=$member_seed) -> $member_ckpt"
+    skip_task=0
+    if [ "$TRAIN_FORCE" != "1" ] && bbml_nonempty_file "$member_ckpt"; then
+      skip_task=1
+      echo "    resume: skipping existing checkpoint"
+    fi
     append_train_task \
       "$GRAPH_MANIFEST" \
       "train:graph:member${member_idx}" \
@@ -216,6 +237,7 @@ else
       "$member_ckpt" \
       "gnn" \
       "$member_seed" \
+      "$skip_task" \
       --graph_manifest "$GRAPH_TRAIN_MANIFEST"
   done
   graph_jobs="$TRAIN_JOBS_VALUE"
@@ -232,6 +254,7 @@ else
     "$MODEL_DIR/bbml_gnn_varonly_best.pt" \
     "gnn" \
     "$SEED" \
+    "$( [ "$TRAIN_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_gnn_varonly_best.pt" && printf '1' || printf '0' )" \
     --parquet "$TRAIN_PARQUET"
   append_train_task \
     "$TABULAR_MANIFEST" \
@@ -240,6 +263,7 @@ else
     "$MODEL_DIR/bbml_mlp_best.pt" \
     "mlp" \
     "$SEED" \
+    "$( [ "$TRAIN_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_mlp_best.pt" && printf '1' || printf '0' )" \
     --parquet "$TRAIN_PARQUET"
   tabular_jobs="$TRAIN_JOBS_VALUE"
   if [ "$tabular_jobs" -gt 2 ]; then

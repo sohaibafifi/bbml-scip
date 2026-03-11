@@ -15,6 +15,7 @@ RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results}"
 MODEL_DIR="$RESULTS_DIR/models"
 EXPORT_JOBS="${EXPORT_JOBS:-2}"
 CALIBRATE_DEVICE="${CALIBRATE_DEVICE:-$(bbml_detect_torch_device)}"
+EXPORT_FORCE="${EXPORT_FORCE:-0}"
 VAL_PARQUET="$DATA_DIR/parquet/val.parquet"
 GRAPH_VAL_MANIFEST="$DATA_DIR/manifests/graph/val.txt"
 
@@ -45,32 +46,46 @@ fi
 echo "=== Calibration and export ==="
 echo "  Export jobs : $EXPORT_JOBS"
 echo "  Device      : $CALIBRATE_DEVICE"
+echo "  Resume      : $( [ "$EXPORT_FORCE" = "1" ] && printf 'off (EXPORT_FORCE=1)' || printf 'on' )"
 echo ""
 
 echo "[1/3] Fitting checkpoint-aware temperatures..."
-"${PYTHON_CMD[@]}" -m bbml.train.calibrate \
-  --ckpt "$GRAPH_ENSEMBLE_SPEC" \
-  --parquet "$VAL_PARQUET" \
-  --graph_manifest "$GRAPH_VAL_MANIFEST" \
-  --device "$CALIBRATE_DEVICE" \
-  --out "$MODEL_DIR/bbml_gnn_graph.temperature.txt"
+if [ "$EXPORT_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_gnn_graph.temperature.txt"; then
+  echo "  - graph ensemble temperature already fitted -> $MODEL_DIR/bbml_gnn_graph.temperature.txt"
+else
+  "${PYTHON_CMD[@]}" -m bbml.train.calibrate \
+    --ckpt "$GRAPH_ENSEMBLE_SPEC" \
+    --parquet "$VAL_PARQUET" \
+    --graph_manifest "$GRAPH_VAL_MANIFEST" \
+    --device "$CALIBRATE_DEVICE" \
+    --out "$MODEL_DIR/bbml_gnn_graph.temperature.txt"
+fi
 
-"${PYTHON_CMD[@]}" -m bbml.train.calibrate \
-  --ckpt "$GNN_VARONLY_CKPT" \
-  --parquet "$VAL_PARQUET" \
-  --device "$CALIBRATE_DEVICE" \
-  --out "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"
+if [ "$EXPORT_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"; then
+  echo "  - var-only temperature already fitted -> $MODEL_DIR/bbml_gnn_varonly.temperature.txt"
+else
+  "${PYTHON_CMD[@]}" -m bbml.train.calibrate \
+    --ckpt "$GNN_VARONLY_CKPT" \
+    --parquet "$VAL_PARQUET" \
+    --device "$CALIBRATE_DEVICE" \
+    --out "$MODEL_DIR/bbml_gnn_varonly.temperature.txt"
+fi
 
-"${PYTHON_CMD[@]}" -m bbml.train.calibrate \
-  --ckpt "$MLP_CKPT" \
-  --parquet "$VAL_PARQUET" \
-  --device "$CALIBRATE_DEVICE" \
-  --out "$MODEL_DIR/bbml_mlp.temperature.txt"
+if [ "$EXPORT_FORCE" != "1" ] && bbml_nonempty_file "$MODEL_DIR/bbml_mlp.temperature.txt"; then
+  echo "  - MLP temperature already fitted -> $MODEL_DIR/bbml_mlp.temperature.txt"
+else
+  "${PYTHON_CMD[@]}" -m bbml.train.calibrate \
+    --ckpt "$MLP_CKPT" \
+    --parquet "$VAL_PARQUET" \
+    --device "$CALIBRATE_DEVICE" \
+    --out "$MODEL_DIR/bbml_mlp.temperature.txt"
+fi
 
 export_manifest="$DATA_DIR/manifests/export_tasks.jsonl"
 PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
 MODEL_DIR="$MODEL_DIR" \
 DATA_DIR="$DATA_DIR" \
+EXPORT_FORCE="$EXPORT_FORCE" \
 "${PYTHON_CMD[@]}" - <<'PY'
 import json
 import os
@@ -82,6 +97,7 @@ data_dir = Path(os.environ["DATA_DIR"])
 manifest = data_dir / "manifests" / "export_tasks.jsonl"
 log_dir = data_dir / "pipeline_logs" / "export"
 log_dir.mkdir(parents=True, exist_ok=True)
+force = os.environ.get("EXPORT_FORCE", "0") == "1"
 
 tasks = [
     ("bbml_gnn_graph_fp32", [*py_launch, "-m", "bbml.export.export_onnx", "--ckpt", str(model_dir / "bbml_gnn_graph_best.pt"), "--out", str(model_dir / "bbml_gnn_graph_fp32.onnx")]),
@@ -119,7 +135,7 @@ with manifest.open("w") as fh:
                     "cmd": cmd,
                     "cwd": os.getcwd(),
                     "log_path": str(log_dir / f"{name}.log"),
-                    "skip": out_path.is_file() and out_path.stat().st_size > 0,
+                    "skip": (not force) and out_path.is_file() and out_path.stat().st_size > 0,
                 }
             )
             + "\n"
@@ -136,6 +152,7 @@ PY_LAUNCH_JSON="$PY_LAUNCH_JSON" \
 MODEL_DIR="$MODEL_DIR" \
 RESULTS_DIR="$RESULTS_DIR" \
 DATA_DIR="$DATA_DIR" \
+EXPORT_FORCE="$EXPORT_FORCE" \
 "${PYTHON_CMD[@]}" - <<'PY'
 import json
 import os
@@ -149,6 +166,7 @@ data_dir = Path(os.environ["DATA_DIR"])
 manifest = data_dir / "manifests" / "latency_tasks.jsonl"
 log_dir = data_dir / "pipeline_logs" / "export"
 log_dir.mkdir(parents=True, exist_ok=True)
+force = os.environ.get("EXPORT_FORCE", "0") == "1"
 
 
 def load_cfg(name: str) -> dict:
@@ -239,7 +257,7 @@ with manifest.open("w") as fh:
                     "cmd": cmd,
                     "cwd": os.getcwd(),
                     "log_path": str(out_path),
-                    "skip": False,
+                    "skip": (not force) and out_path.is_file() and out_path.stat().st_size > 0,
                 }
             )
             + "\n"

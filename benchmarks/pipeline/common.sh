@@ -216,3 +216,7 @@ import sys
 print(Path(sys.argv[1]).resolve())
 PY
 }
+
+bbml_nonempty_file() {
+  [ -f "$1" ] && [ -s "$1" ]
+}
