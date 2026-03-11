@@ -129,16 +129,22 @@ def fit_temperature_listwise(models: List[nn.Module], loader: DataLoader, cfg: d
     optimizer = torch.optim.LBFGS([temperature_param], lr=0.1, max_iter=50)
 
     def closure():  # type: ignore
-        optimizer.zero_grad(set_to_none=True)
-        total_loss = torch.zeros([], device=device)
-        for batch in loader:
-            for group in batch:
-                if group.y_true is None:
-                    continue
-                scores = _score_group(models, group, cfg, device)
-                total_loss = total_loss + listnet_nll(scores, group.y_true.to(device), temperature_param.exp())
-        total_loss.backward()
-        return total_loss
+        with torch.enable_grad():
+            optimizer.zero_grad(set_to_none=True)
+            total_loss = torch.zeros([], device=device)
+            used_groups = 0
+            for batch in loader:
+                for group in batch:
+                    if group.y_true is None:
+                        continue
+                    scores = _score_group(models, group, cfg, device)
+                    total_loss = total_loss + listnet_nll(scores, group.y_true.to(device), temperature_param.exp())
+                    used_groups += 1
+            if used_groups == 0:
+                # Keep the optimization graph valid while leaving T at 1.0.
+                total_loss = temperature_param.sum() * 0.0
+            total_loss.backward()
+            return total_loss
 
     optimizer.step(closure)
 
