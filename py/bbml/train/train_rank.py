@@ -43,11 +43,30 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _auto_num_workers() -> int:
+def _auto_num_workers(device: str = "cpu", graph_inputs: bool = False) -> int:
     cpu = os.cpu_count() or 1
+    if str(device).startswith("cuda"):
+        # Graph NDJSON loading remains Python-heavy and can become unstable with
+        # worker IPC + pin-memory on some cluster/NFS setups. Favor safer defaults.
+        if graph_inputs:
+            return 0
+        if cpu <= 4:
+            return 0
+        return min(2, max(1, cpu // 8))
     if cpu <= 2:
         return 0
     return min(8, max(2, cpu // 2))
+
+
+def _auto_pin_memory(device: str = "cpu", num_workers: int = 0, graph_inputs: bool = False) -> bool:
+    if not str(device).startswith("cuda"):
+        return False
+    # Pin memory helps mostly once the input pipeline is already stable. For the
+    # graph path we default to off because multi-process loader + pin-memory is
+    # exactly the failure mode observed on clusters/NFS.
+    if graph_inputs:
+        return False
+    return num_workers == 0
 
 
 def _build_loader_kwargs(
@@ -672,11 +691,14 @@ def main():
     device = args.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    graph_inputs_requested = args.model == "gnn" and (args.graph_ndjson is not None or args.graph_manifest is not None)
     if args.num_workers < 0:
-        args.num_workers = _auto_num_workers()
+        args.num_workers = _auto_num_workers(device=device, graph_inputs=graph_inputs_requested)
     if args.pin_memory < 0:
-        args.pin_memory = int(device.startswith("cuda"))
+        args.pin_memory = int(_auto_pin_memory(device=device, num_workers=args.num_workers, graph_inputs=graph_inputs_requested))
     pin_memory = bool(args.pin_memory)
+    if graph_inputs_requested and device.startswith("cuda") and args.num_workers > 0 and pin_memory:
+        _log("[warn] graph CUDA training with num_workers>0 and pin_memory=1 can be unstable on cluster/NFS setups")
 
     # Track model config for checkpoint metadata
     model_cfg: Dict[str, Any]

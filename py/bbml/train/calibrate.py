@@ -15,6 +15,7 @@ from bbml.train.train_rank import (
     NodeDataset,
     ScoreMLP,
     _auto_num_workers,
+    _auto_pin_memory,
     _build_loader_kwargs,
     collate_graph_groups,
     collate_groups,
@@ -97,10 +98,11 @@ def _load_models(ckpt_spec: str, device: str) -> Tuple[List[nn.Module], dict]:
 
 
 def _build_loader(cfg: dict, args: argparse.Namespace) -> DataLoader:
+    graph_inputs = bool(cfg.get("graph_inputs", False))
     if args.num_workers < 0:
-        args.num_workers = _auto_num_workers()
+        args.num_workers = _auto_num_workers(device=str(args.device), graph_inputs=graph_inputs)
     if args.pin_memory < 0:
-        args.pin_memory = int(str(args.device).startswith("cuda"))
+        args.pin_memory = int(_auto_pin_memory(device=str(args.device), num_workers=args.num_workers, graph_inputs=graph_inputs))
     pin_memory = bool(args.pin_memory)
     if cfg["model"] == "mlp":
         dataset = NodeDataset(args.parquet, feature_cols=DEFAULT_FEATS)
