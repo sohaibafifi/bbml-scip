@@ -108,7 +108,7 @@ def main() -> int:
     tmp_alpha_path: Path | None = None
     alpha_path_for_set = ""
     if alpha_log_out is not None and not args.disable_ml:
-        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as tmp_alpha:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, dir=alpha_log_out.parent) as tmp_alpha:
             tmp_alpha_path = Path(tmp_alpha.name)
         alpha_path_for_set = str(tmp_alpha_path)
     with tempfile.NamedTemporaryFile("w", suffix=".set", delete=False) as tmp:
@@ -155,7 +155,7 @@ def main() -> int:
 
     cmd = [args.runner_bin, "--problem", args.instance, "--set", set_path]
     try:
-        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as tmp_log:
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False, dir=scip_log.parent) as tmp_log:
             tmp_log_path = Path(tmp_log.name)
         with tmp_log_path.open("w") as fh:
             proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, text=True, check=False)
