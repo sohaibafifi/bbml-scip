@@ -74,6 +74,7 @@ build_train_signature() {
   local mode="$3"
   local source_path="$4"
   python3 - "$model_kind" "$seed_value" "$mode" "$source_path" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -105,7 +106,12 @@ payload = {
 if mode == "graph_manifest":
     payload["graph_manifest"] = stat_payload(source)
     lines = [line.strip() for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
-    payload["graph_sources"] = [stat_payload(Path(line)) for line in lines]
+    digest = hashlib.sha256()
+    for line in lines:
+        digest.update(json.dumps(stat_payload(Path(line)), sort_keys=True).encode("utf-8"))
+        digest.update(b"\n")
+    payload["graph_sources_count"] = len(lines)
+    payload["graph_sources_digest"] = digest.hexdigest()
 else:
     payload["parquet"] = stat_payload(source)
 print(json.dumps(payload, sort_keys=True))

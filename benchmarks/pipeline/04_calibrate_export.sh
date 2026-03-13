@@ -73,6 +73,7 @@ build_calibration_signature() {
   local parquet_path="$2"
   local graph_manifest="${3:-}"
   python3 - "$ckpt_spec" "$parquet_path" "$graph_manifest" "$CALIBRATE_NUM_WORKERS" "$CALIBRATE_PIN_MEMORY" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -102,7 +103,12 @@ if graph_manifest:
     payload["graph_manifest"] = stat_payload(manifest)
     if manifest.exists():
         lines = [line.strip() for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
-        payload["graph_sources"] = [stat_payload(Path(line)) for line in lines]
+        digest = hashlib.sha256()
+        for line in lines:
+            digest.update(json.dumps(stat_payload(Path(line)), sort_keys=True).encode("utf-8"))
+            digest.update(b"\n")
+        payload["graph_sources_count"] = len(lines)
+        payload["graph_sources_digest"] = digest.hexdigest()
 print(json.dumps(payload, sort_keys=True))
 PY
 }
