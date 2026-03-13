@@ -79,9 +79,18 @@ def mean_relative_std(df: pd.DataFrame, value_col: str) -> float | None:
 def load_results(results_root: Path) -> pd.DataFrame:
     rows: list[dict] = []
     for path in sorted(results_root.rglob("*.json")):
+        if path.name.endswith(".meta.json"):
+            continue
+        if "runs" not in path.parts:
+            continue
         try:
             record = json.loads(path.read_text())
         except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        required = {"solver", "seed", "instance_id", "instance_set", "status", "solve_time", "n_nodes"}
+        if not required.issubset(record.keys()):
             continue
         record["_source_path"] = str(path)
         rows.append(record)
@@ -96,6 +105,10 @@ def load_results(results_root: Path) -> pd.DataFrame:
 
 def enrich(df: pd.DataFrame, time_limit: float) -> pd.DataFrame:
     out = df.copy()
+    out["seed"] = pd.to_numeric(out["seed"], errors="coerce")
+    out["solve_time"] = pd.to_numeric(out["solve_time"], errors="coerce")
+    out["n_nodes"] = pd.to_numeric(out["n_nodes"], errors="coerce")
+    out = out.dropna(subset=["seed", "solve_time", "n_nodes", "instance_id", "instance_set", "solver", "status"]).copy()
     out["seed"] = out["seed"].astype(int)
     out["solve_time"] = out["solve_time"].astype(float)
     out["n_nodes"] = out["n_nodes"].astype(float)

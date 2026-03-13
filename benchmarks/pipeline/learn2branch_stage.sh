@@ -54,7 +54,15 @@ case "$STEP" in
     ;;
 esac
 
-DATA_DIR="${DATA_DIR:-$BBML_ROOT/data/learn2branch/$STAGE/$FAMILY}"
+DATA_ROOT="${DATA_DIR:-$BBML_ROOT/data}"
+case "$DATA_ROOT" in
+  */learn2branch/"$STAGE"/"$FAMILY")
+    DATA_DIR="$DATA_ROOT"
+    ;;
+  *)
+    DATA_DIR="$DATA_ROOT/learn2branch/$STAGE/$FAMILY"
+    ;;
+esac
 RESULTS_DIR="${RESULTS_DIR:-$BBML_ROOT/results/learn2branch/$STAGE/$FAMILY}"
 INSTANCE_LIST_DIR="${INSTANCE_LIST_DIR:-$BBML_ROOT/benchmarks/instances/learn2branch/$STAGE/$FAMILY}"
 BENCH_INSTANCE_SETS_DEFAULT="${FAMILY}_easy_test,${FAMILY}_medium_test,${FAMILY}_hard_test"
