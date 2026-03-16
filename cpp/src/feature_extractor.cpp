@@ -64,7 +64,8 @@ void populate_node_lp_stats(SCIP* scip, NodeFeature* node) {
 }  // namespace
 
 ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
-                                             SCIP_NODE* node) const {
+                                             SCIP_NODE* node,
+                                             bool build_graph) const {
   ExtractedFeatures out{};
   out.node.depth = (node != nullptr) ? SCIPnodeGetDepth(node) : 0;
   out.node.best_bound = SCIPgetDualbound(scip);
@@ -134,6 +135,10 @@ ExtractedFeatures FeatureExtractor::fromSCIP(SCIP* scip,
     }
     out.candidates.push_back(cf);
     cand_index.emplace(cf.var_index, i);
+  }
+
+  if (!build_graph) {
+    return out;
   }
 
   // Build graph snapshot (constraints ↔ candidate variables)

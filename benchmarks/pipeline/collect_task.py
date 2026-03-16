@@ -45,6 +45,7 @@ def main() -> int:
     ap.add_argument("--graph-out", required=True)
     ap.add_argument("--scip-log", required=True)
     ap.add_argument("--telemetry-max-nodes-per-instance", type=int, default=0)
+    ap.add_argument("--telemetry-query-expert-prob", type=float, default=1.0)
     ap.add_argument("--telemetry-strongbranch", action="store_true")
     ap.add_argument(
         "--telemetry-oracle",
@@ -76,6 +77,7 @@ def main() -> int:
         tmp.write("bbml/telemetry/append = FALSE\n")
         tmp.write(f"bbml/telemetry/path = {_quote(str(candidate_tmp))}\n")
         tmp.write(f"bbml/telemetry/oracle = {_quote(args.telemetry_oracle)}\n")
+        tmp.write(f"bbml/telemetry/query_expert_prob = {args.telemetry_query_expert_prob:.17g}\n")
         tmp.write(f"bbml/telemetry/strongbranch = {'TRUE' if args.telemetry_strongbranch else 'FALSE'}\n")
         tmp.write("bbml/telemetry/graph = TRUE\n")
         tmp.write(f"bbml/telemetry/graph_path = {_quote(str(graph_tmp))}\n")
@@ -102,7 +104,7 @@ def main() -> int:
         candidate_ok = candidate_tmp.is_file() and candidate_tmp.stat().st_size > 0
         graph_ok = graph_tmp.is_file() and graph_tmp.stat().st_size > 0
         if candidate_ok and graph_ok:
-            if args.telemetry_max_nodes_per_instance > 0:
+            if graph_out.suffix == ".pt" or args.telemetry_max_nodes_per_instance > 0:
                 stats = compact_collection_outputs(
                     candidate_src=candidate_tmp,
                     graph_src=graph_tmp,

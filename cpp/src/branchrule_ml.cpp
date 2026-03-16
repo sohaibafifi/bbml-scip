@@ -1,9 +1,11 @@
 #include "bbml/branchrule_ml.hpp"
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <climits>
 #include <cctype>
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,6 +26,33 @@ double sigmoid(double x) {
   }
   const double z = std::exp(x);
   return z / (1.0 + z);
+}
+
+double unitHash01(std::uint64_t value) {
+  value ^= value >> 33U;
+  value *= 0xff51afd7ed558ccdULL;
+  value ^= value >> 33U;
+  value *= 0xc4ceb9fe1a85ec53ULL;
+  value ^= value >> 33U;
+  constexpr double kDenom = static_cast<double>(std::numeric_limits<std::uint64_t>::max());
+  return static_cast<double>(value) / kDenom;
+}
+
+bool shouldSampleTelemetryNode(SCIP* scip,
+                               SCIP_NODE* node,
+                               double query_prob) {
+  if (query_prob >= 1.0) {
+    return true;
+  }
+  if (query_prob <= 0.0) {
+    return false;
+  }
+  SCIP_Longint node_num = node != nullptr ? SCIPnodeGetNumber(node) : 0;
+  int seedshift = 0;
+  (void)SCIPgetIntParam(scip, "randomization/randomseedshift", &seedshift);
+  std::uint64_t key = static_cast<std::uint64_t>(node_num);
+  key ^= static_cast<std::uint64_t>(static_cast<unsigned int>(seedshift)) * 0x9e3779b97f4a7c15ULL;
+  return unitHash01(key) < query_prob;
 }
 
 std::string toLowerCopy(std::string value) {
@@ -211,7 +240,6 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     return SCIP_OKAY;
   }
   SCIP_NODE* focus = SCIPgetFocusNode(scip);
-  auto feats = data->fx.fromSCIP(scip, focus);
   std::vector<double> blended;
   double alpha = 0.0;
   // runtime parameters
@@ -222,6 +250,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   SCIP_Bool tgraph = FALSE;
   SCIP_Bool talpha = FALSE;
   SCIP_Bool use_confidence_gate = TRUE;
+  SCIP_Real telemetry_query_prob = 1.0;
   SCIP_Real a_min = 0.1, a_max = 0.8, depth_pen = 0.02;
   SCIP_Real a_theta = 0.5;
   SCIP_Real confidence = 0.5;  // base confidence
@@ -239,6 +268,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   (void)SCIPgetStringParam(scip, "bbml/telemetry/oracle", &telemetry_oracle_c);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/graph", &tgraph);
   (void)SCIPgetBoolParam(scip, "bbml/telemetry/alpha", &talpha);
+  (void)SCIPgetRealParam(scip, "bbml/telemetry/query_expert_prob", &telemetry_query_prob);
   (void)SCIPgetBoolParam(scip, "bbml/alpha/use_confidence_gate", &use_confidence_gate);
   (void)SCIPgetRealParam(scip, "bbml/alpha/min", &a_min);
   (void)SCIPgetRealParam(scip, "bbml/alpha/max", &a_max);
@@ -282,6 +312,10 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
   if (talpha_path_c != nullptr && talpha_path_c[0] != '\0') {
     setTelemetryAlphaPath(std::string(talpha_path_c));
   }
+
+  const bool telemetry_sampled = telemetry && shouldSampleTelemetryNode(scip, focus, static_cast<double>(telemetry_query_prob));
+  const bool need_graph_inputs = data->br->requires_graph_inputs();
+  auto feats = data->fx.fromSCIP(scip, focus, need_graph_inputs || (telemetry_sampled && tgraph));
 
   // update blending params
   data->br->set_alpha_params(a_min, a_max, depth_pen);
@@ -329,11 +363,11 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
       parseTelemetryOracleMode(telemetry_oracle_c, tlogsb);
   // optional oracle scores for telemetry
   std::vector<double> sb_up, sb_down;
-  if (telemetry
+  if (telemetry_sampled
       && telemetry_oracle == TelemetryOracleMode::kVanillafullstrong
       && collectVanillafullstrongOracle(scip, cands, nc, &sb_up, &telemetry_idx)) {
     sb_down.clear();
-  } else if (telemetry
+  } else if (telemetry_sampled
       && telemetry_oracle == TelemetryOracleMode::kStrongbranch
       && SCIPgetLPSolstat(scip) == SCIP_LPSOLSTAT_OPTIMAL
       && SCIPallColsInLP(scip)
@@ -375,7 +409,7 @@ static SCIP_RETCODE BranchruleExecLP(SCIP* scip,
     }
   }
   // telemetry: log candidate set for this node
-  if (telemetry) {
+  if (telemetry_sampled) {
     const std::vector<double>* sup = !sb_up.empty() ? &sb_up : nullptr;
     const std::vector<double>* sdown = !sb_down.empty() ? &sb_down : nullptr;
     getTelemetryLogger().log_node_candidates(scip, focus, feats, telemetry_idx, sup, sdown);
@@ -450,6 +484,10 @@ SCIP_RETCODE includeBranchruleML(SCIP* scip) {
   SCIP_CALL(SCIPaddBoolParam(scip, "bbml/telemetry/graph",
       "log graph snapshots (var, con, edges) per node", /*valueptr*/ nullptr, /*isadvanced*/ TRUE,
       /*default*/ FALSE, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
+  SCIP_CALL(SCIPaddRealParam(scip, "bbml/telemetry/query_expert_prob",
+      "probability of querying/logging oracle telemetry at a branching node",
+      /*valueptr*/ nullptr, /*isadvanced*/ TRUE, /*default*/ 1.0,
+      /*min*/ 0.0, /*max*/ 1.0, /*paramchgd*/ nullptr, /*paramdata*/ nullptr));
   SCIP_CALL(SCIPaddStringParam(scip, "bbml/model_path",
       "ONNX model path for scoring", /*valueptr*/ nullptr, /*isadvanced*/ FALSE,
       /*default*/ "", /*paramchgd*/ nullptr, /*paramdata*/ nullptr));

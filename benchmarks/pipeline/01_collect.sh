@@ -18,6 +18,7 @@ SEEDS="${COLLECT_SEEDS:-0 1 2}"
 TL="${COLLECT_TL:-3600}"
 MAX_NODES="${COLLECT_MAX_NODES:-5000}"
 TELEMETRY_MAX_NODES_PER_INSTANCE="${COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE:-0}"
+TELEMETRY_QUERY_EXPERT_PROB="${COLLECT_QUERY_EXPERT_PROB:-1.0}"
 COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 COLLECT_FORCE="${COLLECT_FORCE:-0}"
@@ -64,6 +65,7 @@ echo "  Seeds        : $SEEDS"
 echo "  Time limit   : ${TL}s"
 echo "  Max nodes    : $MAX_NODES"
 echo "  Telemetry cap: $([ "$TELEMETRY_MAX_NODES_PER_INSTANCE" -gt 0 ] && printf '%s nodes/instance' "$TELEMETRY_MAX_NODES_PER_INSTANCE" || printf 'off')"
+echo "  Query prob   : $TELEMETRY_QUERY_EXPERT_PROB"
 echo "  Collect jobs : $COLLECT_JOBS"
 echo "  Oracle       : $COLLECT_ORACLE_VALUE"
 echo "  Resume mode  : $([ "$COLLECT_FORCE" = "1" ] && printf 'off (force rerun)' || printf 'on')"
@@ -90,6 +92,7 @@ for family in "${families[@]}"; do
     TL="$TL" \
     MAX_NODES="$MAX_NODES" \
     TELEMETRY_MAX_NODES_PER_INSTANCE="$TELEMETRY_MAX_NODES_PER_INSTANCE" \
+    TELEMETRY_QUERY_EXPERT_PROB="$TELEMETRY_QUERY_EXPERT_PROB" \
     FORCE="$COLLECT_FORCE" \
     ORACLE="$COLLECT_ORACLE_VALUE" \
     python3 - <<'PY'
@@ -136,6 +139,7 @@ seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
 time_limit = os.environ["TL"]
 max_nodes = os.environ["MAX_NODES"]
 telemetry_max_nodes_per_instance = int(os.environ["TELEMETRY_MAX_NODES_PER_INSTANCE"])
+telemetry_query_expert_prob = os.environ["TELEMETRY_QUERY_EXPERT_PROB"]
 force = os.environ["FORCE"] == "1"
 oracle = os.environ["ORACLE"].strip() or "vanillafullstrong"
 
@@ -159,7 +163,7 @@ with list_file.open() as src, manifest.open("a") as out:
         for seed in seeds:
             total += 1
             candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson.gz"
-            graph_out = graph_dir / (f"{iid}_s{seed}.pt" if telemetry_max_nodes_per_instance > 0 else f"{iid}_s{seed}.ndjson")
+            graph_out = graph_dir / f"{iid}_s{seed}.pt"
             legacy_candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
             legacy_graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
             scip_log = scip_dir / f"{iid}_s{seed}.log"
@@ -209,6 +213,8 @@ with list_file.open() as src, manifest.open("a") as out:
                     str(scip_log),
                     "--telemetry-max-nodes-per-instance",
                     str(telemetry_max_nodes_per_instance),
+                    "--telemetry-query-expert-prob",
+                    telemetry_query_expert_prob,
                     "--telemetry-oracle",
                     oracle,
                 ],

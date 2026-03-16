@@ -29,6 +29,7 @@ class BranchruleML {
     use_confidence_gate_ = use_confidence_gate;
   }
   void set_temperature(double T) { temperature_ = (T <= 0.0 ? 1.0 : T); }
+  bool requires_graph_inputs() const { return runner_ != nullptr && runner_->requires_graph_inputs(); }
 
  private:
   std::unique_ptr<OnnxRunner> runner_;

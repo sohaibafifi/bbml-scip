@@ -76,15 +76,15 @@ def compact_collection_outputs(
     max_graph_nodes: int,
     seed: int,
 ) -> CompactTelemetryStats:
-    if max_graph_nodes <= 0:
-        raise ValueError("max_graph_nodes must be > 0 for compact graph telemetry")
-
     rng = random.Random(seed)
     selected: list[tuple[int, dict]] = []
     graph_nodes_total = 0
     for stream_idx, obj in enumerate(_iter_ndjson(graph_src)):
         graph_nodes_total += 1
         compact = _compact_graph_record(obj)
+        if max_graph_nodes <= 0:
+            selected.append((stream_idx, compact))
+            continue
         if len(selected) < max_graph_nodes:
             selected.append((stream_idx, compact))
             continue

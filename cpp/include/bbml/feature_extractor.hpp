@@ -42,7 +42,7 @@ struct ExtractedFeatures {
 
 class FeatureExtractor {
  public:
-  ExtractedFeatures fromSCIP(SCIP* scip, SCIP_NODE* node) const;
+  ExtractedFeatures fromSCIP(SCIP* scip, SCIP_NODE* node, bool build_graph = true) const;
 
  private:
   struct StaticVarFeat {

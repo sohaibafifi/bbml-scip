@@ -12,6 +12,7 @@ class OnnxRunner {
   ~OnnxRunner();
   std::pair<std::vector<double>, double> score_candidates(
       const ExtractedFeatures& feats);
+  bool requires_graph_inputs();
 
   const std::string& model_path() const { return model_path_; }
   void set_model_path(const std::string& path) { model_path_ = path; }

@@ -140,6 +140,25 @@ OnnxRunner::~OnnxRunner() {
 #endif
 }
 
+bool OnnxRunner::requires_graph_inputs() {
+#ifndef BBML_WITH_ONNX
+  return false;
+#else
+  if (model_path_.empty()) {
+    return false;
+  }
+  try {
+    ensure_session_();
+  } catch (const Ort::Exception&) {
+    return false;
+  }
+  if (ort_ == nullptr || ort_->sessions.empty()) {
+    return false;
+  }
+  return ort_->sessions.front().input_count > 1;
+#endif
+}
+
 std::pair<std::vector<double>, double> OnnxRunner::score_candidates(
     const ExtractedFeatures& feats) {
 #ifndef BBML_WITH_ONNX
