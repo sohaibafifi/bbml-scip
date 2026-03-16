@@ -22,6 +22,7 @@ TELEMETRY_QUERY_EXPERT_PROB="${COLLECT_QUERY_EXPERT_PROB:-1.0}"
 SAMPLE_BUDGET_ALL="${COLLECT_SAMPLE_BUDGET:-0}"
 SAMPLE_BUDGET_TRAIN="${COLLECT_SAMPLE_BUDGET_TRAIN:-$SAMPLE_BUDGET_ALL}"
 SAMPLE_BUDGET_VAL="${COLLECT_SAMPLE_BUDGET_VAL:-$SAMPLE_BUDGET_ALL}"
+SAMPLE_BUDGET_REPORT_STEP_PCT="${COLLECT_SAMPLE_BUDGET_REPORT_STEP_PCT:-5}"
 COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 COLLECT_FORCE="${COLLECT_FORCE:-0}"
@@ -70,6 +71,7 @@ echo "  Max nodes    : $MAX_NODES"
 echo "  Telemetry cap: $([ "$TELEMETRY_MAX_NODES_PER_INSTANCE" -gt 0 ] && printf '%s nodes/instance' "$TELEMETRY_MAX_NODES_PER_INSTANCE" || printf 'off')"
 echo "  Query prob   : $TELEMETRY_QUERY_EXPERT_PROB"
 echo "  Sample budget: train=$SAMPLE_BUDGET_TRAIN val=$SAMPLE_BUDGET_VAL"
+echo "  Budget step  : ${SAMPLE_BUDGET_REPORT_STEP_PCT}%"
 echo "  Collect jobs : $COLLECT_JOBS"
 echo "  Oracle       : $COLLECT_ORACLE_VALUE"
 echo "  Resume mode  : $([ "$COLLECT_FORCE" = "1" ] && printf 'off (force rerun)' || printf 'on')"
@@ -99,6 +101,7 @@ for family in "${families[@]}"; do
     TELEMETRY_QUERY_EXPERT_PROB="$TELEMETRY_QUERY_EXPERT_PROB" \
     SAMPLE_BUDGET_TRAIN="$SAMPLE_BUDGET_TRAIN" \
     SAMPLE_BUDGET_VAL="$SAMPLE_BUDGET_VAL" \
+    SAMPLE_BUDGET_REPORT_STEP_PCT="$SAMPLE_BUDGET_REPORT_STEP_PCT" \
     FORCE="$COLLECT_FORCE" \
     ORACLE="$COLLECT_ORACLE_VALUE" \
     python3 - <<'PY'
@@ -150,6 +153,7 @@ max_nodes = os.environ["MAX_NODES"]
 telemetry_max_nodes_per_instance = int(os.environ["TELEMETRY_MAX_NODES_PER_INSTANCE"])
 telemetry_query_expert_prob = os.environ["TELEMETRY_QUERY_EXPERT_PROB"]
 sample_budget_value = int(os.environ[f"SAMPLE_BUDGET_{split.upper()}"])
+sample_budget_report_step_pct = max(1, int(os.environ["SAMPLE_BUDGET_REPORT_STEP_PCT"]))
 force = os.environ["FORCE"] == "1"
 oracle = os.environ["ORACLE"].strip() or "vanillafullstrong"
 
@@ -181,6 +185,8 @@ if sample_budget_value > 0:
         "split": split,
         "budget": sample_budget_value,
         "used": min(existing_samples, sample_budget_value),
+        "report_step_pct": sample_budget_report_step_pct,
+        "reported_bucket": (min(existing_samples, sample_budget_value) * 100 // sample_budget_value) // sample_budget_report_step_pct,
     }
     budget_state_path.write_text(json.dumps(budget_payload, indent=2, sort_keys=True) + "\n")
 total = 0

@@ -22,6 +22,23 @@ class Task:
     skip: bool = False
 
 
+def _extract_summary_line(log_path: str | None) -> str | None:
+    if not log_path:
+        return None
+    path = Path(log_path)
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if line.startswith("TASK_SUMMARY ") or line.startswith("BUDGET_PROGRESS "):
+            return line
+    return None
+
+
 def _load_manifest(path: Path) -> list[Task]:
     tasks: list[Task] = []
     with path.open() as fh:
@@ -102,7 +119,9 @@ def main() -> int:
             name, returncode, log_path = future.result()
             if returncode == 0:
                 successes += 1
-                print(f"[ok] {name}", flush=True)
+                summary = _extract_summary_line(log_path)
+                suffix = f" {summary}" if summary else ""
+                print(f"[ok] {name}{suffix}", flush=True)
             else:
                 failures.append((name, returncode, log_path))
                 where = f" log={log_path}" if log_path else ""

@@ -40,6 +40,11 @@ def _completed_log(path: Path) -> bool:
         return False
 
 
+def _format_budget_progress(split: str, used: int, budget: int, *, kept: int, current: int) -> str:
+    pct = 100.0 if budget <= 0 else (100.0 * used / budget)
+    return f"BUDGET_PROGRESS split={split} used={used}/{budget} " f"pct={pct:.1f} kept={kept}/{current}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run one SCIP telemetry collection task.")
     ap.add_argument("--runner-bin", required=True)
@@ -135,12 +140,14 @@ def main() -> int:
                 candidate_tmp.replace(candidate_out)
                 graph_tmp.replace(graph_out)
             if args.sample_budget_state:
-                _apply_sample_budget(
+                budget_summary = _apply_sample_budget(
                     candidate_out=candidate_out,
                     graph_out=graph_out,
                     done_marker=done_marker,
                     state_path=Path(args.sample_budget_state),
                 )
+                if budget_summary:
+                    print(budget_summary, file=sys.stderr, flush=True)
             if candidate_out.is_file() and graph_out.is_file():
                 _safe_unlink(done_marker)
         else:
@@ -157,12 +164,13 @@ def main() -> int:
     return int(proc.returncode)
 
 
-def _apply_sample_budget(candidate_out: Path, graph_out: Path, done_marker: Path, state_path: Path) -> None:
+def _apply_sample_budget(candidate_out: Path, graph_out: Path, done_marker: Path, state_path: Path) -> str | None:
     if fcntl is None:
-        return
+        return None
     if not graph_out.is_file() or graph_out.stat().st_size <= 0:
-        return
+        return None
     state_path.parent.mkdir(parents=True, exist_ok=True)
+    summary = None
     with state_path.open("a+") as fh:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         fh.seek(0)
@@ -170,6 +178,9 @@ def _apply_sample_budget(candidate_out: Path, graph_out: Path, done_marker: Path
         payload = json.loads(raw) if raw else {}
         budget = int(payload.get("budget", 0))
         used = int(payload.get("used", 0))
+        split = str(payload.get("split", state_path.stem))
+        report_step = max(1, int(payload.get("report_step_pct", 5)))
+        reported_bucket = int(payload.get("reported_bucket", 0))
         current = count_graph_samples(graph_out)
         remaining = max(0, budget - used)
         kept = current
@@ -184,12 +195,18 @@ def _apply_sample_budget(candidate_out: Path, graph_out: Path, done_marker: Path
             used += kept
             if used > budget:
                 used = budget
+            pct = 100.0 * used / budget if budget > 0 else 100.0
+            current_bucket = min(100, int(pct)) // report_step
+            if current_bucket > reported_bucket or used >= budget:
+                payload["reported_bucket"] = current_bucket
+                summary = _format_budget_progress(split, used, budget, kept=kept, current=current)
         payload["used"] = used
         fh.seek(0)
         fh.truncate()
         fh.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         fh.flush()
         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    return summary
 
 
 if __name__ == "__main__":
