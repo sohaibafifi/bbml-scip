@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import shutil
 from pathlib import Path
 
 from generate_instances import write_ca, write_cfl, write_mis, write_sc
@@ -94,9 +96,15 @@ def _generate_block(
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     for idx in range(count):
-        path = out_dir / f"{family}_{idx:05d}.lp"
+        path = out_dir / f"{family}_{idx:05d}.lp.gz"
+        legacy_path = out_dir / f"{family}_{idx:05d}.lp"
         if not path.exists():
-            writer(path, seed=seed_offset + idx, **writer_kwargs)
+            if legacy_path.exists():
+                with legacy_path.open("rb") as in_fh, gzip.open(path, "wb") as out_fh:
+                    shutil.copyfileobj(in_fh, out_fh)
+                legacy_path.unlink()
+            else:
+                writer(path, seed=seed_offset + idx, **writer_kwargs)
         paths.append(path.resolve())
     return paths
 

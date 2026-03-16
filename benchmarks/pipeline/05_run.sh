@@ -132,9 +132,7 @@ from pathlib import Path
 
 def instance_id(path: Path) -> str:
     name = path.name
-    if name.endswith(".mps.gz"):
-        return name[:-7]
-    for suffix in (".lp", ".mps", ".gz"):
+    for suffix in (".lp.gz", ".mps.gz", ".lp", ".mps", ".gz"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     return name
@@ -153,6 +151,10 @@ def resolve_instance(raw: str, instance_set: str, root: Path) -> Path:
     fallback = data_dir / "instances" / family / split / inst_path.name
     if fallback.exists():
         return fallback.resolve()
+    if inst_path.name.endswith(".lp"):
+        gzip_fallback = data_dir / "instances" / family / split / f"{inst_path.name}.gz"
+        if gzip_fallback.exists():
+            return gzip_fallback.resolve()
     return inst_path
 
 

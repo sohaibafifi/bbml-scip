@@ -87,9 +87,7 @@ import os
 
 def instance_id(path: Path) -> str:
     name = path.name
-    if name.endswith(".mps.gz"):
-        return name[:-7]
-    for suffix in (".lp", ".mps", ".gz"):
+    for suffix in (".lp.gz", ".mps.gz", ".lp", ".mps", ".gz"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     return name

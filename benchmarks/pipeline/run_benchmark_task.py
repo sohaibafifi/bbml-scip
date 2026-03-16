@@ -13,9 +13,7 @@ from parse_scip_log import parse_log
 
 def _instance_id(path: str) -> str:
     name = Path(path).name
-    if name.endswith(".mps.gz"):
-        return name[:-7]
-    for suffix in (".lp", ".mps", ".gz"):
+    for suffix in (".lp.gz", ".mps.gz", ".lp", ".mps", ".gz"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     return name

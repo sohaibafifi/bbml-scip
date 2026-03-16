@@ -131,7 +131,7 @@ bbml_find_probe_instance() {
 
   candidate="$(
     find "$BBML_ROOT/data/instances" "$BBML_ROOT/examples/data" -type f \
-      \( -name '*.lp' -o -name '*.mps' -o -name '*.mps.gz' \) 2>/dev/null \
+      \( -name '*.lp' -o -name '*.lp.gz' -o -name '*.mps' -o -name '*.mps.gz' \) 2>/dev/null \
       | sort | sed -n '1p'
   )"
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then

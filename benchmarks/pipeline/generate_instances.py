@@ -12,7 +12,9 @@ No ecole or SCIP dependency required -- only numpy and scipy.
 """
 
 import argparse
+import gzip
 import pathlib
+import shutil
 from itertools import combinations
 
 import numpy as np
@@ -24,12 +26,34 @@ import scipy.sparse
 # ---------------------------------------------------------------------------
 
 
+def _problem_name(path: pathlib.Path) -> str:
+    name = path.name
+    for suffix in (".lp.gz", ".mps.gz", ".lp", ".mps", ".gz"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+def _write_text(path: pathlib.Path, text: str) -> None:
+    if path.name.endswith(".gz"):
+        with gzip.open(path, "wt", encoding="utf-8") as fh:
+            fh.write(text)
+        return
+    path.write_text(text)
+
+
+def _gzip_existing_lp(src: pathlib.Path, dst: pathlib.Path) -> None:
+    with src.open("rb") as in_fh, gzip.open(dst, "wb") as out_fh:
+        shutil.copyfileobj(in_fh, out_fh)
+    src.unlink()
+
+
 def _write_lp(path: pathlib.Path, obj_sense: str, obj: dict[str, float], constrs: list[tuple[str, dict[str, float], str, float]], bounds: dict[str, tuple[float | None, float | None]] | None = None, generals: list[str] | None = None, binary: list[str] | None = None) -> None:
     """Write a minimal LP file.
 
     constrs: list of (name, {var: coef}, sense, rhs)
     """
-    lines = [f"\\Problem name: {path.stem}\n"]
+    lines = [f"\\Problem name: {_problem_name(path)}\n"]
     # Objective
     obj_str = " + ".join(f"{c:.6g} {v}" if c >= 0 else f"{c:.6g} {v}" for v, c in obj.items())
     lines.append(f"{obj_sense}\n  obj: {obj_str}\n")
@@ -55,7 +79,7 @@ def _write_lp(path: pathlib.Path, obj_sense: str, obj: dict[str, float], constrs
         for i in range(0, len(binary), per_line):
             lines.append("  " + " ".join(binary[i : i + per_line]) + "\n")
     lines.append("end\n")
-    path.write_text("".join(lines))
+    _write_text(path, "".join(lines))
 
 
 class Graph:
@@ -467,6 +491,12 @@ def main() -> None:
     parser.add_argument("--cfl-ratio", type=float, default=5.0, help="Facility location capacity/demand ratio")
     parser.add_argument("--mis-nodes", type=int, default=500, help="MIS node count")
     parser.add_argument("--mis-affinity", type=int, default=4, help="MIS Barabasi-Albert attachment factor")
+    parser.add_argument(
+        "--compression",
+        choices=("gzip", "none"),
+        default="gzip",
+        help="Instance file compression. 'gzip' writes .lp.gz, 'none' writes plain .lp.",
+    )
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -482,8 +512,16 @@ def main() -> None:
         writer_kwargs = {"n_nodes": args.mis_nodes, "m": args.mis_affinity}
 
     for i in range(args.start, args.start + args.count):
-        path = args.out_dir / f"{args.family}_{i:05d}.lp"
+        plain_path = args.out_dir / f"{args.family}_{i:05d}.lp"
+        gzip_path = args.out_dir / f"{args.family}_{i:05d}.lp.gz"
+        path = gzip_path if args.compression == "gzip" else plain_path
+        legacy_path = plain_path if args.compression == "gzip" else gzip_path
         if path.exists():
+            continue
+        if args.compression == "gzip" and plain_path.exists():
+            _gzip_existing_lp(plain_path, gzip_path)
+            continue
+        if args.compression == "none" and legacy_path.exists():
             continue
         writer(path, seed=i + args.seed_offset, **writer_kwargs)
         if (i - args.start + 1) % 500 == 0 or i == args.start:

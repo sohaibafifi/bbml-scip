@@ -1,3 +1,4 @@
+import gzip
 import importlib.util
 from pathlib import Path
 
@@ -54,3 +55,17 @@ def test_mis_generator_uses_clique_inequalities():
     assert len(binary) == 100
     assert any(len(lhs) > 2 for _, lhs, _, _ in constrs)
     assert all(sense == "<=" and rhs == 1.0 for _, _, sense, rhs in constrs)
+
+
+def test_writer_supports_gzipped_lp_output(tmp_path):
+    module = _load_generate_instances()
+    out_path = tmp_path / "sc_00000.lp.gz"
+
+    module.write_sc(out_path, seed=0, n_rows=20, n_cols=40, density=0.1)
+
+    assert out_path.is_file()
+    with gzip.open(out_path, "rt", encoding="utf-8") as fh:
+        text = fh.read()
+    assert "\\Problem name: sc_00000" in text
+    assert "subject to" in text
+    assert "binary" in text

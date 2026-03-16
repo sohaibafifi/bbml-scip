@@ -20,6 +20,7 @@ N_VAL="${N_VAL:-2000}"
 N_TEST="${N_TEST:-2000}"
 GENERATE_JOBS="${GENERATE_JOBS:-$(bbml_default_generate_jobs)}"
 GENERATE_CHUNK_SIZE="${GENERATE_CHUNK_SIZE:-500}"
+INSTANCE_COMPRESSION="${GENERATE_INSTANCE_COMPRESSION:-gzip}"
 DRY_RUN=false
 
 for arg in "$@"; do
@@ -46,6 +47,7 @@ echo "  Families            : $FAMILIES"
 echo "  Counts              : train=$N_TRAIN val=$N_VAL test=$N_TEST"
 echo "  Generate jobs       : $GENERATE_JOBS"
 echo "  Generate chunk size : $GENERATE_CHUNK_SIZE"
+echo "  Compression         : $INSTANCE_COMPRESSION"
 echo "  Output              : $DATA_DIR/instances"
 echo ""
 
@@ -76,7 +78,35 @@ for family in "${FAM_LIST[@]}"; do
 
     existing=0
     if [ -d "$out_dir" ]; then
-      existing="$(find "$out_dir" -name '*.lp' | wc -l | tr -d ' ')"
+      existing="$(
+        OUT_DIR="$out_dir" INSTANCE_COMPRESSION="$INSTANCE_COMPRESSION" python3 - <<'PY'
+from pathlib import Path
+import gzip
+import os
+import shutil
+
+out_dir = Path(os.environ["OUT_DIR"])
+compression = os.environ["INSTANCE_COMPRESSION"]
+seen = set()
+for path in out_dir.iterdir():
+    if not path.is_file():
+        continue
+    name = path.name
+    if compression == "gzip" and name.endswith(".lp"):
+        gzip_path = path.with_name(f"{name}.gz")
+        if not gzip_path.exists():
+            with path.open("rb") as in_fh, gzip.open(gzip_path, "wb") as out_fh:
+                shutil.copyfileobj(in_fh, out_fh)
+            path.unlink()
+        path = gzip_path
+        name = path.name
+    if name.endswith(".lp.gz"):
+        seen.add(name[:-3])
+    elif name.endswith(".lp"):
+        seen.add(name)
+print(len(seen))
+PY
+      )"
     fi
 
     if [ "$existing" -ge "$n" ]; then
@@ -93,6 +123,7 @@ for family in "${FAM_LIST[@]}"; do
       TARGET_COUNT="$n" \
       SEED_OFFSET="$offset" \
       CHUNK_SIZE="$GENERATE_CHUNK_SIZE" \
+      INSTANCE_COMPRESSION="$INSTANCE_COMPRESSION" \
       LOG_DIR="$DATA_DIR/pipeline_logs/generate" \
       python3 - <<'PY'
 import json
@@ -109,6 +140,7 @@ existing = int(os.environ["EXISTING"])
 target = int(os.environ["TARGET_COUNT"])
 seed_offset = int(os.environ["SEED_OFFSET"])
 chunk_size = max(1, int(os.environ["CHUNK_SIZE"]))
+instance_compression = os.environ["INSTANCE_COMPRESSION"]
 log_dir = Path(os.environ["LOG_DIR"])
 
 manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +157,8 @@ with manifest.open("w") as fh:
             str(count),
             "--seed-offset",
             str(seed_offset),
+            "--compression",
+            instance_compression,
         ]
         rec = {
             "name": f"generate:{family}:{split}:{start}",
@@ -139,8 +173,44 @@ PY
       fi
     fi
 
-    find "$out_dir" -name '*.lp' | sort > "$list_file"
-    actual="$(wc -l < "$list_file" | tr -d ' ')"
+    OUT_DIR="$out_dir" LIST_FILE="$list_file" INSTANCE_COMPRESSION="$INSTANCE_COMPRESSION" python3 - <<'PY'
+from pathlib import Path
+import gzip
+import os
+import shutil
+
+out_dir = Path(os.environ["OUT_DIR"])
+list_file = Path(os.environ["LIST_FILE"])
+compression = os.environ["INSTANCE_COMPRESSION"]
+selected = {}
+for path in sorted(out_dir.iterdir()):
+    if not path.is_file():
+        continue
+    name = path.name
+    if compression == "gzip" and name.endswith(".lp"):
+        gzip_path = path.with_name(f"{name}.gz")
+        if not gzip_path.exists():
+            with path.open("rb") as in_fh, gzip.open(gzip_path, "wb") as out_fh:
+                shutil.copyfileobj(in_fh, out_fh)
+            path.unlink()
+        path = gzip_path
+        name = path.name
+    if name.endswith(".lp.gz"):
+        key = name[:-3]
+        priority = 0
+    elif name.endswith(".lp"):
+        key = name
+        priority = 1
+    else:
+        continue
+    prev = selected.get(key)
+    if prev is None or priority < prev[0]:
+        selected[key] = (priority, path.resolve())
+entries = [str(path) for _, path in sorted(selected.values(), key=lambda item: str(item[1]))]
+list_file.write_text("".join(f"{entry}\n" for entry in entries))
+print(len(entries))
+PY
+    actual="$(tail -n 1 "$list_file" >/dev/null 2>&1; wc -l < "$list_file" | tr -d ' ')"
     echo "  $split: list written ($actual paths) -> $list_file"
   done
   echo ""
