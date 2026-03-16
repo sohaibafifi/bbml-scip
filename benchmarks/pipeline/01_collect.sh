@@ -19,6 +19,9 @@ TL="${COLLECT_TL:-3600}"
 MAX_NODES="${COLLECT_MAX_NODES:-5000}"
 TELEMETRY_MAX_NODES_PER_INSTANCE="${COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE:-0}"
 TELEMETRY_QUERY_EXPERT_PROB="${COLLECT_QUERY_EXPERT_PROB:-1.0}"
+SAMPLE_BUDGET_ALL="${COLLECT_SAMPLE_BUDGET:-0}"
+SAMPLE_BUDGET_TRAIN="${COLLECT_SAMPLE_BUDGET_TRAIN:-$SAMPLE_BUDGET_ALL}"
+SAMPLE_BUDGET_VAL="${COLLECT_SAMPLE_BUDGET_VAL:-$SAMPLE_BUDGET_ALL}"
 COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 COLLECT_FORCE="${COLLECT_FORCE:-0}"
@@ -66,6 +69,7 @@ echo "  Time limit   : ${TL}s"
 echo "  Max nodes    : $MAX_NODES"
 echo "  Telemetry cap: $([ "$TELEMETRY_MAX_NODES_PER_INSTANCE" -gt 0 ] && printf '%s nodes/instance' "$TELEMETRY_MAX_NODES_PER_INSTANCE" || printf 'off')"
 echo "  Query prob   : $TELEMETRY_QUERY_EXPERT_PROB"
+echo "  Sample budget: train=$SAMPLE_BUDGET_TRAIN val=$SAMPLE_BUDGET_VAL"
 echo "  Collect jobs : $COLLECT_JOBS"
 echo "  Oracle       : $COLLECT_ORACLE_VALUE"
 echo "  Resume mode  : $([ "$COLLECT_FORCE" = "1" ] && printf 'off (force rerun)' || printf 'on')"
@@ -93,12 +97,15 @@ for family in "${families[@]}"; do
     MAX_NODES="$MAX_NODES" \
     TELEMETRY_MAX_NODES_PER_INSTANCE="$TELEMETRY_MAX_NODES_PER_INSTANCE" \
     TELEMETRY_QUERY_EXPERT_PROB="$TELEMETRY_QUERY_EXPERT_PROB" \
+    SAMPLE_BUDGET_TRAIN="$SAMPLE_BUDGET_TRAIN" \
+    SAMPLE_BUDGET_VAL="$SAMPLE_BUDGET_VAL" \
     FORCE="$COLLECT_FORCE" \
     ORACLE="$COLLECT_ORACLE_VALUE" \
     python3 - <<'PY'
 import json
 import os
 from pathlib import Path
+import torch
 
 def instance_id(path: Path) -> str:
     name = path.name
@@ -140,6 +147,7 @@ time_limit = os.environ["TL"]
 max_nodes = os.environ["MAX_NODES"]
 telemetry_max_nodes_per_instance = int(os.environ["TELEMETRY_MAX_NODES_PER_INSTANCE"])
 telemetry_query_expert_prob = os.environ["TELEMETRY_QUERY_EXPERT_PROB"]
+sample_budget_value = int(os.environ[f"SAMPLE_BUDGET_{split.upper()}"])
 force = os.environ["FORCE"] == "1"
 oracle = os.environ["ORACLE"].strip() or "vanillafullstrong"
 
@@ -150,6 +158,29 @@ for path in (candidate_dir, graph_dir, scip_dir):
     path.mkdir(parents=True, exist_ok=True)
 
 manifest.parent.mkdir(parents=True, exist_ok=True)
+budget_state_path = data_dir / "manifests" / f"{family}_{split}.sample_budget.json"
+existing_samples = 0
+if sample_budget_value > 0:
+    for path in sorted(graph_dir.glob("*.pt")):
+        if not path.is_file() or path.stat().st_size <= 0:
+            continue
+        payload = torch.load(path, map_location="cpu")
+        existing_samples += int(len(payload.get("items", [])))
+    if existing_samples < sample_budget_value:
+        for path in sorted(graph_dir.glob("*.ndjson")):
+            if not path.is_file() or path.stat().st_size <= 0:
+                continue
+            with path.open() as fh:
+                existing_samples += sum(1 for line in fh if line.strip())
+            if existing_samples >= sample_budget_value:
+                break
+    budget_payload = {
+        "family": family,
+        "split": split,
+        "budget": sample_budget_value,
+        "used": min(existing_samples, sample_budget_value),
+    }
+    budget_state_path.write_text(json.dumps(budget_payload, indent=2, sort_keys=True) + "\n")
 total = 0
 skipped = 0
 runnable = 0
@@ -171,20 +202,23 @@ with list_file.open() as src, manifest.open("a") as out:
             skip = False
             if not force:
                 skip = (
-                    completed_log(scip_log)
-                    and (
-                        (
+                    (
+                        completed_log(scip_log)
+                        and (
                             (
-                                (candidate_out.is_file() and candidate_out.stat().st_size > 0)
-                                or (legacy_candidate_out.is_file() and legacy_candidate_out.stat().st_size > 0)
+                                (
+                                    (candidate_out.is_file() and candidate_out.stat().st_size > 0)
+                                    or (legacy_candidate_out.is_file() and legacy_candidate_out.stat().st_size > 0)
+                                )
+                                and (
+                                    (graph_out.is_file() and graph_out.stat().st_size > 0)
+                                    or (legacy_graph_out.is_file() and legacy_graph_out.stat().st_size > 0)
+                                )
                             )
-                            and (
-                                (graph_out.is_file() and graph_out.stat().st_size > 0)
-                                or (legacy_graph_out.is_file() and legacy_graph_out.stat().st_size > 0)
-                            )
+                            or done_marker.is_file()
                         )
-                        or done_marker.is_file()
                     )
+                    or (sample_budget_value > 0 and existing_samples >= sample_budget_value)
                 )
             if skip:
                 skipped += 1
@@ -215,6 +249,8 @@ with list_file.open() as src, manifest.open("a") as out:
                     str(telemetry_max_nodes_per_instance),
                     "--telemetry-query-expert-prob",
                     telemetry_query_expert_prob,
+                    "--sample-budget-state",
+                    str(budget_state_path),
                     "--telemetry-oracle",
                     oracle,
                 ],
@@ -226,6 +262,8 @@ with list_file.open() as src, manifest.open("a") as out:
                 rec["cmd"].append("--telemetry-strongbranch")
             out.write(json.dumps(rec) + "\n")
 print(f"  queued total={total} runnable={runnable} skipped={skipped}")
+if sample_budget_value > 0:
+    print(f"  existing samples={existing_samples} budget={sample_budget_value}")
 PY
     echo ""
   done

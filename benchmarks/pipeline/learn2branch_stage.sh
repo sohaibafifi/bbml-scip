@@ -79,6 +79,8 @@ cfg = {
         "collect_max_nodes": "500",
         "collect_telemetry_nodes": "0",
         "collect_query_prob": "0.05",
+        "collect_budget_train": "10000",
+        "collect_budget_val": "2000",
         "run_jobs": "4",
     },
     "dev": {
@@ -87,6 +89,8 @@ cfg = {
         "collect_max_nodes": "1000",
         "collect_telemetry_nodes": "0",
         "collect_query_prob": "0.05",
+        "collect_budget_train": "50000",
+        "collect_budget_val": "10000",
         "run_jobs": "4",
     },
     "final": {
@@ -95,6 +99,8 @@ cfg = {
         "collect_max_nodes": "5000",
         "collect_telemetry_nodes": "0",
         "collect_query_prob": "0.05",
+        "collect_budget_train": "100000",
+        "collect_budget_val": "20000",
         "run_jobs": "4",
     },
 }[stage]
@@ -103,6 +109,8 @@ print(cfg["collect_tl"])
 print(cfg["collect_max_nodes"])
 print(cfg["collect_telemetry_nodes"])
 print(cfg["collect_query_prob"])
+print(cfg["collect_budget_train"])
+print(cfg["collect_budget_val"])
 print(cfg["run_jobs"])
 PY
 )"
@@ -111,7 +119,9 @@ COLLECT_TL_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '2p')"
 COLLECT_MAX_NODES_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '3p')"
 COLLECT_TELEMETRY_NODES_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '4p')"
 COLLECT_QUERY_PROB_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '5p')"
-RUN_JOBS_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '6p')"
+COLLECT_BUDGET_TRAIN_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '6p')"
+COLLECT_BUDGET_VAL_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '7p')"
+RUN_JOBS_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '8p')"
 
 TRAIN_DEVICE="${TRAIN_DEVICE:-$(bbml_detect_torch_device)}"
 CALIBRATE_DEVICE="${CALIBRATE_DEVICE:-$(bbml_detect_torch_device)}"
@@ -148,6 +158,8 @@ run_collect() {
   COLLECT_MAX_NODES="${COLLECT_MAX_NODES:-$COLLECT_MAX_NODES_DEFAULT}" \
   COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE="${COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE:-$COLLECT_TELEMETRY_NODES_DEFAULT}" \
   COLLECT_QUERY_EXPERT_PROB="${COLLECT_QUERY_EXPERT_PROB:-$COLLECT_QUERY_PROB_DEFAULT}" \
+  COLLECT_SAMPLE_BUDGET_TRAIN="${COLLECT_SAMPLE_BUDGET_TRAIN:-$COLLECT_BUDGET_TRAIN_DEFAULT}" \
+  COLLECT_SAMPLE_BUDGET_VAL="${COLLECT_SAMPLE_BUDGET_VAL:-$COLLECT_BUDGET_VAL_DEFAULT}" \
   COLLECT_ORACLE="${COLLECT_ORACLE:-vanillafullstrong}" \
   COLLECT_JOBS="$COLLECT_JOBS" \
   COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}" \

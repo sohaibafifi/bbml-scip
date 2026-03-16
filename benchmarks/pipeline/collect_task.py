@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import gzip
 import os
 import subprocess
@@ -9,7 +10,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from bbml.data.telemetry_compact import compact_collection_outputs
+from bbml.data.telemetry_compact import compact_collection_outputs, count_graph_samples, trim_compacted_outputs
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
 
 
 def _quote(path: str) -> str:
@@ -46,6 +52,7 @@ def main() -> int:
     ap.add_argument("--scip-log", required=True)
     ap.add_argument("--telemetry-max-nodes-per-instance", type=int, default=0)
     ap.add_argument("--telemetry-query-expert-prob", type=float, default=1.0)
+    ap.add_argument("--sample-budget-state", default=None)
     ap.add_argument("--telemetry-strongbranch", action="store_true")
     ap.add_argument(
         "--telemetry-oracle",
@@ -127,7 +134,15 @@ def main() -> int:
             else:
                 candidate_tmp.replace(candidate_out)
                 graph_tmp.replace(graph_out)
-            _safe_unlink(done_marker)
+            if args.sample_budget_state:
+                _apply_sample_budget(
+                    candidate_out=candidate_out,
+                    graph_out=graph_out,
+                    done_marker=done_marker,
+                    state_path=Path(args.sample_budget_state),
+                )
+            if candidate_out.is_file() and graph_out.is_file():
+                _safe_unlink(done_marker)
         else:
             _safe_unlink(candidate_tmp)
             _safe_unlink(graph_tmp)
@@ -140,6 +155,41 @@ def main() -> int:
                 return 1
             done_marker.write_text("no_branch_telemetry\n")
     return int(proc.returncode)
+
+
+def _apply_sample_budget(candidate_out: Path, graph_out: Path, done_marker: Path, state_path: Path) -> None:
+    if fcntl is None:
+        return
+    if not graph_out.is_file() or graph_out.stat().st_size <= 0:
+        return
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    with state_path.open("a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        fh.seek(0)
+        raw = fh.read().strip()
+        payload = json.loads(raw) if raw else {}
+        budget = int(payload.get("budget", 0))
+        used = int(payload.get("used", 0))
+        current = count_graph_samples(graph_out)
+        remaining = max(0, budget - used)
+        kept = current
+        if budget > 0:
+            if remaining <= 0:
+                _safe_unlink(candidate_out)
+                _safe_unlink(graph_out)
+                done_marker.write_text("budget_exhausted\n")
+                kept = 0
+            elif current > remaining:
+                kept = trim_compacted_outputs(candidate_out, graph_out, remaining)
+            used += kept
+            if used > budget:
+                used = budget
+        payload["used"] = used
+        fh.seek(0)
+        fh.truncate()
+        fh.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        fh.flush()
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 if __name__ == "__main__":

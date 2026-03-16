@@ -122,6 +122,7 @@ def compact_collection_outputs(
         "graph_nodes_kept": len(kept_items),
         "items": [
             {
+                "node_id": item["node_id"],
                 "var_feat": item["var_feat"],
                 "con_feat": item["con_feat"],
                 "edge_index": item["edge_index"],
@@ -138,3 +139,41 @@ def compact_collection_outputs(
         candidate_rows_total=candidate_rows_total,
         candidate_rows_kept=candidate_rows_kept,
     )
+
+
+def count_graph_samples(path: Path) -> int:
+    if not path.exists() or path.stat().st_size == 0:
+        return 0
+    if path.suffix == ".pt":
+        payload = torch.load(path, map_location="cpu")
+        return int(len(payload.get("items", [])))
+    total = 0
+    with path.open() as fh:
+        for line in fh:
+            if line.strip():
+                total += 1
+    return total
+
+
+def trim_compacted_outputs(candidate_out: Path, graph_out: Path, keep_graph_nodes: int) -> int:
+    payload = torch.load(graph_out, map_location="cpu")
+    items = list(payload.get("items", []))
+    if keep_graph_nodes < 0:
+        keep_graph_nodes = 0
+    items = items[:keep_graph_nodes]
+    keep_node_ids = {int(item["node_id"]) for item in items}
+    payload["items"] = items
+    payload["graph_nodes_kept"] = len(items)
+    torch.save(payload, graph_out)
+
+    tmp_candidate = candidate_out.with_suffix(candidate_out.suffix + ".tmp")
+    with gzip.open(candidate_out, "rt") as src, gzip.open(tmp_candidate, "wt") as dst:
+        for line in src:
+            raw = line.strip()
+            if not raw:
+                continue
+            obj = json.loads(raw)
+            if int(obj.get("node_id", -1)) in keep_node_ids:
+                dst.write(line if line.endswith("\n") else line + "\n")
+    tmp_candidate.replace(candidate_out)
+    return len(items)
