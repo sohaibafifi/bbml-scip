@@ -77,31 +77,36 @@ cfg = {
         "bench_seeds": "0",
         "collect_tl": "300",
         "collect_max_nodes": "500",
+        "collect_telemetry_nodes": "100",
         "run_jobs": "4",
     },
     "dev": {
         "bench_seeds": "0 1",
         "collect_tl": "600",
         "collect_max_nodes": "1000",
+        "collect_telemetry_nodes": "100",
         "run_jobs": "4",
     },
     "final": {
         "bench_seeds": "0 1 2 3 4",
         "collect_tl": "1200",
         "collect_max_nodes": "5000",
+        "collect_telemetry_nodes": "100",
         "run_jobs": "4",
     },
 }[stage]
 print(cfg["bench_seeds"])
 print(cfg["collect_tl"])
 print(cfg["collect_max_nodes"])
+print(cfg["collect_telemetry_nodes"])
 print(cfg["run_jobs"])
 PY
 )"
 BENCH_SEEDS_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '1p')"
 COLLECT_TL_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '2p')"
 COLLECT_MAX_NODES_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '3p')"
-RUN_JOBS_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '4p')"
+COLLECT_TELEMETRY_NODES_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '4p')"
+RUN_JOBS_DEFAULT="$(printf '%s\n' "$stage_values" | sed -n '5p')"
 
 TRAIN_DEVICE="${TRAIN_DEVICE:-$(bbml_detect_torch_device)}"
 CALIBRATE_DEVICE="${CALIBRATE_DEVICE:-$(bbml_detect_torch_device)}"
@@ -136,6 +141,7 @@ run_collect() {
   COLLECT_SEEDS="${COLLECT_SEEDS:-0}" \
   COLLECT_TL="${COLLECT_TL:-$COLLECT_TL_DEFAULT}" \
   COLLECT_MAX_NODES="${COLLECT_MAX_NODES:-$COLLECT_MAX_NODES_DEFAULT}" \
+  COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE="${COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE:-$COLLECT_TELEMETRY_NODES_DEFAULT}" \
   COLLECT_ORACLE="${COLLECT_ORACLE:-vanillafullstrong}" \
   COLLECT_JOBS="$COLLECT_JOBS" \
   COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}" \

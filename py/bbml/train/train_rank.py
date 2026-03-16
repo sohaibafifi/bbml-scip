@@ -2,6 +2,7 @@ import argparse
 import math
 import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -439,6 +440,7 @@ class GraphJsonNodeDataset(Dataset):
         self.paths = self._resolve_paths(ndjson_path, manifest_path)
         self._offsets: List[tuple[str, int]] = []
         self._items: Optional[List[GraphNodeGroup]] = None
+        self._shard_cache: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
         self.d_var = 0
         self.d_con = 0
         cache_path = self._cache_path(ndjson_path, manifest_path)
@@ -447,13 +449,19 @@ class GraphJsonNodeDataset(Dataset):
         else:
             _log(f"[data] indexing graph telemetry from {len(self.paths)} file(s)")
             for idx, path in enumerate(self.paths, start=1):
-                with open(path, "rb") as f:
-                    off = 0
-                    for line in f:
-                        ln = len(line)
-                        if ln > 1:
-                            self._offsets.append((path, off))
-                        off += ln
+                if path.endswith(".pt"):
+                    payload = torch.load(path, map_location="cpu")
+                    items = payload.get("items", [])
+                    for local_idx in range(len(items)):
+                        self._offsets.append((path, local_idx))
+                else:
+                    with open(path, "rb") as f:
+                        off = 0
+                        for line in f:
+                            ln = len(line)
+                            if ln > 1:
+                                self._offsets.append((path, off))
+                            off += ln
                 if idx == len(self.paths) or idx % 50 == 0:
                     _log(f"[data] indexed {idx}/{len(self.paths)} files ({len(self._offsets)} graph nodes)")
             if len(self._offsets) > 0:
@@ -603,6 +611,9 @@ class GraphJsonNodeDataset(Dataset):
 
     def _read_item(self, idx: int) -> "GraphNodeGroup":
         path, off = self._offsets[idx]
+        if path.endswith(".pt"):
+            shard = self._load_shard(path)
+            return self._deserialize_compact_item(shard[off])
         with open(path, "rb") as f:
             f.seek(off)
             line = f.readline()
@@ -623,6 +634,36 @@ class GraphJsonNodeDataset(Dataset):
             y_true = _compress_target_scores(tgt)
         chosen = int(obj.get("chosen_idx", 0))
         return GraphNodeGroup(var_feat=var_feat, con_feat=con_feat, edge_index=edge_index, y_true=y_true, chosen=chosen)
+
+    def _load_shard(self, path: str) -> List[Dict[str, Any]]:
+        cached = self._shard_cache.get(path)
+        if cached is not None:
+            self._shard_cache.move_to_end(path)
+            return cached
+        payload = torch.load(path, map_location="cpu")
+        items = payload.get("items", [])
+        self._shard_cache[path] = items
+        self._shard_cache.move_to_end(path)
+        while len(self._shard_cache) > 8:
+            self._shard_cache.popitem(last=False)
+        return items
+
+    def _deserialize_compact_item(self, payload: Dict[str, Any]) -> "GraphNodeGroup":
+        var_feat = payload["var_feat"].to(dtype=torch.float32)
+        con_feat = payload.get("con_feat")
+        if con_feat is not None:
+            con_feat = con_feat.to(dtype=torch.float32)
+        edge_index = payload["edge_index"].to(dtype=torch.long)
+        y_true = payload.get("y_true")
+        if y_true is not None:
+            y_true = y_true.to(dtype=torch.float32)
+        return GraphNodeGroup(
+            var_feat=var_feat,
+            con_feat=con_feat,
+            edge_index=edge_index,
+            y_true=y_true,
+            chosen=payload.get("chosen"),
+        )
 
     def __getitem__(self, idx: int) -> "GraphNodeGroup":
         if self._items is not None:

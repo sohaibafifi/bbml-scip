@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from bbml.data.telemetry_compact import compact_collection_outputs
 
 
 def _quote(path: str) -> str:
@@ -41,6 +44,7 @@ def main() -> int:
     ap.add_argument("--candidate-out", required=True)
     ap.add_argument("--graph-out", required=True)
     ap.add_argument("--scip-log", required=True)
+    ap.add_argument("--telemetry-max-nodes-per-instance", type=int, default=0)
     ap.add_argument("--telemetry-strongbranch", action="store_true")
     ap.add_argument(
         "--telemetry-oracle",
@@ -98,8 +102,29 @@ def main() -> int:
         candidate_ok = candidate_tmp.is_file() and candidate_tmp.stat().st_size > 0
         graph_ok = graph_tmp.is_file() and graph_tmp.stat().st_size > 0
         if candidate_ok and graph_ok:
-            candidate_tmp.replace(candidate_out)
-            graph_tmp.replace(graph_out)
+            if args.telemetry_max_nodes_per_instance > 0:
+                stats = compact_collection_outputs(
+                    candidate_src=candidate_tmp,
+                    graph_src=graph_tmp,
+                    candidate_out=candidate_out,
+                    graph_out=graph_out,
+                    max_graph_nodes=args.telemetry_max_nodes_per_instance,
+                    seed=args.seed,
+                )
+                _safe_unlink(candidate_tmp)
+                _safe_unlink(graph_tmp)
+                print(
+                    "collect_task compacted telemetry " f"graph={stats.graph_nodes_kept}/{stats.graph_nodes_total} " f"candidate_rows={stats.candidate_rows_kept}/{stats.candidate_rows_total}",
+                    file=sys.stderr,
+                )
+            elif candidate_out.suffix == ".gz":
+                with candidate_tmp.open("rb") as src, gzip.open(candidate_out, "wb") as dst:
+                    dst.write(src.read())
+                _safe_unlink(candidate_tmp)
+                graph_tmp.replace(graph_out)
+            else:
+                candidate_tmp.replace(candidate_out)
+                graph_tmp.replace(graph_out)
             _safe_unlink(done_marker)
         else:
             _safe_unlink(candidate_tmp)

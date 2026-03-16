@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import json
 from pathlib import Path
 import sys
@@ -9,9 +10,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
+def _open_text(path: Path):
+    return gzip.open(path, "rt") if path.suffix == ".gz" else path.open()
+
+
 def _validate_ndjson(path: Path, original: Exception) -> None:
     try:
-        with path.open() as fh:
+        with _open_text(path) as fh:
             for lineno, line in enumerate(fh, start=1):
                 raw = line.strip()
                 if not raw:
@@ -30,7 +35,7 @@ def _validate_ndjson(path: Path, original: Exception) -> None:
 
 def _iter_json_chunks_stdlib(path: Path, chunksize: int) -> Iterator[pd.DataFrame]:
     rows: list[dict] = []
-    with path.open() as fh:
+    with _open_text(path) as fh:
         for lineno, line in enumerate(fh, start=1):
             raw = line.strip()
             if not raw:

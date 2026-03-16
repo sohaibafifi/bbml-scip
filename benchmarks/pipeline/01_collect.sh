@@ -17,6 +17,7 @@ INSTANCES_DIR="${INSTANCE_LIST_DIR:-$BBML_ROOT/benchmarks/instances}"
 SEEDS="${COLLECT_SEEDS:-0 1 2}"
 TL="${COLLECT_TL:-3600}"
 MAX_NODES="${COLLECT_MAX_NODES:-5000}"
+TELEMETRY_MAX_NODES_PER_INSTANCE="${COLLECT_TELEMETRY_MAX_NODES_PER_INSTANCE:-0}"
 COLLECT_SPLITS="${COLLECT_SPLITS:-train,val}"
 COLLECT_JOBS="${COLLECT_JOBS:-$(bbml_default_solver_jobs)}"
 COLLECT_FORCE="${COLLECT_FORCE:-0}"
@@ -62,6 +63,7 @@ echo "  Splits       : ${SPLIT_LIST[*]}"
 echo "  Seeds        : $SEEDS"
 echo "  Time limit   : ${TL}s"
 echo "  Max nodes    : $MAX_NODES"
+echo "  Telemetry cap: $([ "$TELEMETRY_MAX_NODES_PER_INSTANCE" -gt 0 ] && printf '%s nodes/instance' "$TELEMETRY_MAX_NODES_PER_INSTANCE" || printf 'off')"
 echo "  Collect jobs : $COLLECT_JOBS"
 echo "  Oracle       : $COLLECT_ORACLE_VALUE"
 echo "  Resume mode  : $([ "$COLLECT_FORCE" = "1" ] && printf 'off (force rerun)' || printf 'on')"
@@ -87,6 +89,7 @@ for family in "${families[@]}"; do
     SEEDS="$SEEDS" \
     TL="$TL" \
     MAX_NODES="$MAX_NODES" \
+    TELEMETRY_MAX_NODES_PER_INSTANCE="$TELEMETRY_MAX_NODES_PER_INSTANCE" \
     FORCE="$COLLECT_FORCE" \
     ORACLE="$COLLECT_ORACLE_VALUE" \
     python3 - <<'PY'
@@ -132,6 +135,7 @@ runner_bin = os.environ["BBML_RUNNER"]
 seeds = [seed for seed in os.environ["SEEDS"].split() if seed]
 time_limit = os.environ["TL"]
 max_nodes = os.environ["MAX_NODES"]
+telemetry_max_nodes_per_instance = int(os.environ["TELEMETRY_MAX_NODES_PER_INSTANCE"])
 force = os.environ["FORCE"] == "1"
 oracle = os.environ["ORACLE"].strip() or "vanillafullstrong"
 
@@ -154,8 +158,10 @@ with list_file.open() as src, manifest.open("a") as out:
         iid = instance_id(inst_path)
         for seed in seeds:
             total += 1
-            candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
-            graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
+            candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson.gz"
+            graph_out = graph_dir / (f"{iid}_s{seed}.pt" if telemetry_max_nodes_per_instance > 0 else f"{iid}_s{seed}.ndjson")
+            legacy_candidate_out = candidate_dir / f"{iid}_s{seed}.ndjson"
+            legacy_graph_out = graph_dir / f"{iid}_s{seed}.ndjson"
             scip_log = scip_dir / f"{iid}_s{seed}.log"
             done_marker = candidate_out.with_suffix(candidate_out.suffix + ".done")
             skip = False
@@ -164,10 +170,14 @@ with list_file.open() as src, manifest.open("a") as out:
                     completed_log(scip_log)
                     and (
                         (
-                            candidate_out.is_file()
-                            and candidate_out.stat().st_size > 0
-                            and graph_out.is_file()
-                            and graph_out.stat().st_size > 0
+                            (
+                                (candidate_out.is_file() and candidate_out.stat().st_size > 0)
+                                or (legacy_candidate_out.is_file() and legacy_candidate_out.stat().st_size > 0)
+                            )
+                            and (
+                                (graph_out.is_file() and graph_out.stat().st_size > 0)
+                                or (legacy_graph_out.is_file() and legacy_graph_out.stat().st_size > 0)
+                            )
                         )
                         or done_marker.is_file()
                     )
@@ -197,6 +207,8 @@ with list_file.open() as src, manifest.open("a") as out:
                     str(graph_out),
                     "--scip-log",
                     str(scip_log),
+                    "--telemetry-max-nodes-per-instance",
+                    str(telemetry_max_nodes_per_instance),
                     "--telemetry-oracle",
                     oracle,
                 ],

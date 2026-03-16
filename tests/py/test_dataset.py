@@ -1,6 +1,7 @@
 import json
 
 import pandas as pd
+import torch
 from bbml.train.train_rank import NodeDataset, GraphJsonNodeDataset, DEFAULT_FEATS
 
 
@@ -85,3 +86,28 @@ def test_graph_json_dataset_reuses_offset_cache(tmp_path):
     assert len(ds_cached) == 1
     assert ds_cached.d_var == 9
     assert ds_cached.d_con == 4
+
+
+def test_graph_json_dataset_reads_compact_pt_shards(tmp_path):
+    shard_path = tmp_path / "graph.pt"
+    torch.save(
+        {
+            "version": 1,
+            "items": [
+                {
+                    "var_feat": torch.tensor([[0.1] * 9, [0.2] * 9], dtype=torch.float16),
+                    "con_feat": torch.tensor([[0.0] * 4], dtype=torch.float16),
+                    "edge_index": torch.tensor([[0, 0], [0, 1]], dtype=torch.int32),
+                    "y_true": torch.tensor([0.0, 1.0], dtype=torch.float32),
+                    "chosen": 1,
+                }
+            ],
+        },
+        shard_path,
+    )
+    ds = GraphJsonNodeDataset(ndjson_path=str(shard_path))
+    assert len(ds) == 1
+    grp = ds[0]
+    assert grp.var_feat.dtype == torch.float32
+    assert grp.edge_index.dtype == torch.long
+    assert grp.chosen == 1

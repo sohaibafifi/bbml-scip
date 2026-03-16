@@ -114,8 +114,12 @@ for line in list_file.read_text().splitlines():
     if not inst:
         continue
     iid = instance_id(Path(inst))
-    candidate_paths.extend(sorted(candidate_dir.glob(f"{iid}_s*.ndjson")))
-    graph_paths.extend(sorted(graph_dir.glob(f"{iid}_s*.ndjson")))
+    candidate_compact = sorted(candidate_dir.glob(f"{iid}_s*.ndjson.gz"))
+    candidate_legacy = sorted(candidate_dir.glob(f"{iid}_s*.ndjson"))
+    graph_compact = sorted(graph_dir.glob(f"{iid}_s*.pt"))
+    graph_legacy = sorted(graph_dir.glob(f"{iid}_s*.ndjson"))
+    candidate_paths.extend(candidate_compact or candidate_legacy)
+    graph_paths.extend(graph_compact or graph_legacy)
 
 candidate_manifest.write_text(
     "".join(f"{path.resolve()}\n" for path in candidate_paths if path.is_file() and path.stat().st_size > 0)
